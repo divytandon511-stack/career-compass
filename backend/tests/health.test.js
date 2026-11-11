@@ -6,11 +6,15 @@ import http from 'node:http';
 
 import { app } from '../src/app.js';
 import { env } from '../src/config/env.js';
-import { startServer, shutdown } from '../src/server.js';
+import { startServer, shutdown, isMainModule, server } from '../src/server.js';
 import { AppError } from '../src/utils/app-error.js';
 import { errorHandler } from '../src/middleware/error-handler.js';
 
 describe('Health Endpoint, Security Headers, CORS, and Server Startup', () => {
+  afterAll(async () => {
+    await shutdown();
+  });
+
   it('GET /api/v1/health returns HTTP 200 and the standard health data envelope', async () => {
     const res = await request(app).get('/api/v1/health');
 
@@ -123,22 +127,48 @@ describe('Health Endpoint, Security Headers, CORS, and Server Startup', () => {
   });
 
   it('handles asynchronous HTTP startup errors (EADDRINUSE) when a port conflict occurs', async () => {
-    const conflictPort = 4088;
     const blockerServer = http.createServer((req, res) => res.end('blocker'));
 
-    await new Promise((resolve) => blockerServer.listen(conflictPort, resolve));
+    // Bind to port 0 to obtain an ephemeral port assigned by the OS
+    await new Promise((resolve) => blockerServer.listen(0, resolve));
+    const ephemeralPort = blockerServer.address().port;
 
     try {
-      // Attempt to start our application on the already occupied port
-      await expect(startServer(conflictPort)).rejects.toThrow();
+      // Attempt to start our application on the already occupied ephemeral port
+      await expect(startServer(ephemeralPort)).rejects.toMatchObject({
+        code: 'EADDRINUSE',
+      });
     } finally {
       await new Promise((resolve) => blockerServer.close(resolve));
     }
   });
 
   it('prevents duplicate shutdown executions and handles idempotent shutdown', async () => {
-    // Calling shutdown multiple times should resolve cleanly without crashing
-    await expect(shutdown('SIGTERM')).resolves.toBeUndefined();
+    // Calling shutdown multiple times sequentially and concurrently resolves cleanly
+    await expect(Promise.all([shutdown('SIGTERM'), shutdown('SIGTERM')])).resolves.toBeDefined();
     await expect(shutdown('SIGINT')).resolves.toBeUndefined();
+  });
+
+  it('supports starting a server again after a completed shutdown', async () => {
+    // Start on ephemeral port 0
+    const serverInstance1 = await startServer(0);
+    expect(serverInstance1.listening).toBe(true);
+
+    // Shut down cleanly
+    await shutdown('SIGTERM');
+    expect(serverInstance1.listening).toBe(false);
+
+    // Start again on ephemeral port 0
+    const serverInstance2 = await startServer(0);
+    expect(serverInstance2.listening).toBe(true);
+
+    // Clean up
+    await shutdown('SIGTERM');
+    expect(serverInstance2.listening).toBe(false);
+  });
+
+  it('verifies importing server.js does not start an HTTP server', () => {
+    expect(isMainModule()).toBe(false);
+    expect(server).toBeNull();
   });
 });
