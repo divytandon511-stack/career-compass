@@ -1,6 +1,6 @@
 # CareerCompass — AI Guidance System Design
 
-**Status:** Authoritative Architectural Design  
+**Status:** Proposed architectural design, not implemented (pending mentor/team review of open integration items)
 **Version:** 1.0 · 11 November 2026  
 **Document Owner:** Dhavika Bika (ISD Lead & AI Integration Engineer)  
 **Stakeholder Framework:** Ministry of Education • Samagra Shiksha Abhiyan • NEP 2020  
@@ -262,6 +262,9 @@ const GuidanceSessionSchema = new mongoose.Schema({
 // Compound index for fast student session retrieval
 GuidanceSessionSchema.index({ studentId: 1, updatedAt: -1 });
 ```
+
+> [!NOTE]
+> The model identifier (`'gpt-4o-mini'`) in the schema is a configurable reference placeholder; the actual provider and model selection remain an open integration decision pending university budget and mentor approval (see `docs/architecture.md` §13). Similarly, the 180-day retention and automated purge rules represent proposed governance recommendations pending formal school and mentor approval (see `docs/data-model.md` §6.5).
 
 ### Operational Resilience (Dual-Database Integrity)
 - **PostgreSQL is Master:** If MongoDB experiences downtime, core platform functions (**User Login, Assessment Scoring, Cosine Recommendations, and Counsellor Booking**) remain **100% operational**.

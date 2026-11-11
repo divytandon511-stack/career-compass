@@ -350,6 +350,7 @@ A curated career entry in the catalogue. Careers are soft-deleted (unpublished),
 | `title` | `VARCHAR(120)` | `NOT NULL` | 2–120 characters |
 | `description` | `TEXT` | `NULL` | Human-reviewed summary |
 | `published` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | Only published careers appear in student views |
+| `profile_version` | `INTEGER` | `NOT NULL, DEFAULT 1` | Monotonic version; incremented on dimension weight revision |
 | `source_note` | `TEXT` | `NULL` | Source/verification provenance for catalogue entry |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL, DEFAULT NOW()` | |
 | `updated_at` | `TIMESTAMPTZ` | `NOT NULL, DEFAULT NOW()` | |
@@ -359,14 +360,15 @@ A curated career entry in the catalogue. Careers are soft-deleted (unpublished),
 **Prisma model:**
 ```prisma
 model Career {
-  id          String   @id @default(uuid()) @db.Uuid
-  slug        String   @unique @db.VarChar(120)
-  title       String   @db.VarChar(120)
-  description String?  @db.Text
-  published   Boolean  @default(false)
-  sourceNote  String?  @map("source_note") @db.Text
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id             String   @id @default(uuid()) @db.Uuid
+  slug           String   @unique @db.VarChar(120)
+  title          String   @db.VarChar(120)
+  description    String?  @db.Text
+  published      Boolean  @default(false)
+  profileVersion Int      @default(1) @map("profile_version")
+  sourceNote     String?  @map("source_note") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   dimensions      CareerDimension[]
   careerSkills    CareerSkill[]
@@ -494,7 +496,7 @@ Persisted career recommendations linked to a specific assessment attempt. Genera
 | `career_id` | `UUID` | `FK → careers.id ON DELETE RESTRICT, NOT NULL` | |
 | `rank` | `INTEGER` | `NOT NULL, CHECK(rank >= 1)` | Deterministic: score desc, slug asc |
 | `similarity_score` | `DECIMAL(7,6)` | `NOT NULL, CHECK(similarity_score >= 0 AND similarity_score <= 1)` | Cosine similarity [0, 1] |
-| `explanation_json` | `JSONB` | `NULL` | `{reasons:[], cautions:[]}` |
+| `explanation_json` | `JSONB` | `NULL` | `{reasons:[], cautions:[], careerProfileVersion:1, dimensionSnapshot:{}, algorithmWeights:{}}` |
 | `algorithm_version` | `VARCHAR(50)` | `NOT NULL` | e.g. `cosine-v1` |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL, DEFAULT NOW()` | |
 
@@ -502,6 +504,12 @@ Persisted career recommendations linked to a specific assessment attempt. Genera
 
 > [!IMPORTANT]
 > The scoring logic that populates `similarity_score`, `rank`, and `explanation_json` is owned by Divy's recommendation service. This model defines the storage contract only.
+>
+> **Historical Reproducibility Strategy:** An `updated_at` timestamp alone on `careers` does not preserve previous target vector values. To guarantee historical recommendation reproducibility when career vectors or scoring parameters evolve:
+> 1. **Student Vector:** Preserved immutably in `assessment_attempts.scores_json`.
+> 2. **Career Vector:** Captured at calculation time via `careerProfileVersion` and snapshotted into `explanation_json.dimensionSnapshot` (e.g. `{"ANALYTICAL": 0.90, "CREATIVE": 0.30, ...}`).
+> 3. **Global Algorithm Dimension Weights ($w_d$):** Reproducible via the immutable `algorithm_version` tag (e.g., `cosine-v1` strictly defines immutable unit weights $w_d = 1.0$ for all 6 dimensions; any weight tuning requires a new immutable identifier like `cosine-v2`) and/or snapshotted directly in `explanation_json.algorithmWeights`.
+> An auditor can re-verify the exact cosine similarity calculation at any future date using only `assessment_attempts.scores_json`, `recommendations.explanation_json.dimensionSnapshot`, and the versioned/snapshotted algorithm weights, without introducing complex temporal tables or schema changes.
 
 **Prisma model:**
 ```prisma
@@ -602,22 +610,24 @@ Appointment booking linking a student to a counsellor's slot.
 | `id` | `UUID` | `PK, DEFAULT gen_random_uuid()` | |
 | `student_id` | `UUID` | `FK → student_profiles.user_id ON DELETE CASCADE, NOT NULL` | |
 | `counsellor_id` | `UUID` | `FK → counsellor_profiles.user_id ON DELETE RESTRICT, NOT NULL` | Denormalized from slot for query convenience |
-| `slot_id` | `UUID` | `FK → availability_slots.id ON DELETE RESTRICT, NOT NULL` | Enforced active uniqueness via partial index |
+| `slot_id` | `UUID` | `FK → availability_slots.id ON DELETE RESTRICT, NOT NULL` | Enforced active/completed uniqueness via partial index |
 | `status` | `ENUM('CONFIRMED','COMPLETED','CANCELLED')` | `NOT NULL, DEFAULT 'CONFIRMED'` | |
 | `note` | `VARCHAR(500)` | `NULL` | Optional discussion note from student |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL, DEFAULT NOW()` | |
 | `updated_at` | `TIMESTAMPTZ` | `NOT NULL, DEFAULT NOW()` | |
 
 **Constraints:**
-- **Partial Unique Index:** `CREATE UNIQUE INDEX uq_bookings_active_slot ON bookings (slot_id) WHERE status = 'CONFIRMED';`
-  - Enforces that at most **one** active (`CONFIRMED`) booking can exist for a slot at any point in time.
-  - Allows cancelled (`CANCELLED`) bookings to remain in the table for historical auditing, counsellor context, and cancellation metrics without blocking future rebooking of the same slot.
+- **Partial Unique Index:** `CREATE UNIQUE INDEX uq_bookings_active_or_completed_slot ON bookings (slot_id) WHERE status IN ('CONFIRMED', 'COMPLETED');`
+  - Enforces that at most **one** active (`CONFIRMED`) or fulfilled (`COMPLETED`) booking can exist for a slot across its lifecycle.
+  - **Prevents invalid rebooking after completion:** If the partial index covered only `CONFIRMED`, transitioning a booking to `COMPLETED` would drop it from the index, creating a vulnerability where a completed slot could be illegally rebooked. By including both `CONFIRMED` and `COMPLETED`, a completed session permanently retains its unique claim on that slot.
+  - **Preserves valid cancellation & rebooking:** If a booking is cancelled (`CANCELLED`), its status transitions out of the indexed set (`CONFIRMED`, `COMPLETED`), immediately allowing the slot to return to `AVAILABLE` and accept a new confirmed booking.
+  - All historical cancelled records are permanently preserved in the table for auditing, counsellor notes, and cancellation rate analytics without blocking valid rebooking.
 - **Foreign Keys:** `student_id → student_profiles.user_id`, `counsellor_id → counsellor_profiles.user_id`, `slot_id → availability_slots.id`.
 
 **Allowed status transitions:**
 - `CONFIRMED → COMPLETED` (counsellor marks session done)
 - `CONFIRMED → CANCELLED` (student cancels, or counsellor cancels; frees slot for rebooking)
-- No transitions from `COMPLETED` or `CANCELLED`
+- No transitions from `COMPLETED` or `CANCELLED` (terminal states)
 
 **Prisma model:**
 ```prisma
@@ -643,7 +653,7 @@ model Booking {
 
 // Note: Prisma DSL does not natively support partial WHERE predicates on @@unique.
 // The partial unique index is defined in a custom Prisma migration:
-// CREATE UNIQUE INDEX uq_bookings_active_slot ON bookings (slot_id) WHERE status = 'CONFIRMED';
+// CREATE UNIQUE INDEX uq_bookings_active_or_completed_slot ON bookings (slot_id) WHERE status IN ('CONFIRMED', 'COMPLETED');
 
 enum BookingStatus {
   CONFIRMED
@@ -712,7 +722,7 @@ enum OutboxStatus {
 | StudentProfile → SavedCareer | 1 : N | `saved_careers.student_id` | CASCADE |
 | Career → SavedCareer | 1 : N | `saved_careers.career_id` | CASCADE |
 | CounsellorProfile → AvailabilitySlot | 1 : N | `availability_slots.counsellor_id` | CASCADE |
-| AvailabilitySlot → Booking | 1 : 0..1 active (1 : N historical) | `bookings.slot_id` (partial UNIQUE on active) | RESTRICT |
+| AvailabilitySlot → Booking | 1 : 0..1 active/completed (1 : N historical) | `bookings.slot_id` (partial UNIQUE on active or completed) | RESTRICT |
 | StudentProfile → Booking | 1 : N | `bookings.student_id` | CASCADE |
 | CounsellorProfile → Booking | 1 : N | `bookings.counsellor_id` | RESTRICT |
 
@@ -730,7 +740,7 @@ enum OutboxStatus {
 ### 4.2 Schema Evolution Rules
 
 - Published assessments are immutable; add a new version row instead of altering questions.
-- Career dimension profiles are versioned through the career's `updated_at` and the attempt's `assessment_version` snapshot.
+- Career dimension profiles and algorithm weights are versioned via `profile_version` on `Career`, immutable `algorithm_version` tags defining global dimension weight vectors ($w_d$), and an immutable `dimensionSnapshot` embedded within each `Recommendation.explanation_json` record. When an administrator updates a career's dimension weights, `profile_version` increments and new assessments use the updated vector. Existing historical recommendations remain fully reproducible by comparing the attempt's `scores_json` with the snapshotted career vector and versioned algorithm weights.
 - Adding nullable columns or new tables is non-breaking. Removing columns requires a two-phase migration (deprecate → remove).
 - Enum additions (e.g., new `Dimension` value) require a migration and agreement across all three team members.
 
@@ -803,9 +813,9 @@ COMMIT;
 1. **Atomic Conditional State Update:** The `UPDATE availability_slots SET status = 'BOOKED' WHERE id = :slotId AND status = 'AVAILABLE'` statement acquires an exclusive row lock during statement execution in PostgreSQL. If two concurrent transactions execute this simultaneously, the first acquires the row and flips the status to `'BOOKED'`. The second transaction waits for the lock, then evaluates the `WHERE status = 'AVAILABLE'` predicate against the newly committed row; the predicate evaluates to false, updating 0 rows. The application detects `count === 0` and immediately responds with `409 Conflict (SLOT_UNAVAILABLE)` without proceeding.
 2. **Database Partial Unique Index Safeguard:** Even if application concurrency logic or transaction isolation levels were misconfigured, the partial unique index:
    ```sql
-   CREATE UNIQUE INDEX uq_bookings_active_slot ON bookings (slot_id) WHERE status = 'CONFIRMED';
+   CREATE UNIQUE INDEX uq_bookings_active_or_completed_slot ON bookings (slot_id) WHERE status IN ('CONFIRMED', 'COMPLETED');
    ```
-   guarantees that PostgreSQL will reject any simultaneous `INSERT` into `bookings` for the same `slot_id` with a unique constraint violation (`23505`), converted by the service layer into a clean `409 Conflict`.
+   guarantees that PostgreSQL will reject any simultaneous `INSERT` into `bookings` for the same `slot_id` with a unique constraint violation (`23505`), converted by the service layer into a clean `409 Conflict`. Crucially, because the condition includes both `'CONFIRMED'` and `'COMPLETED'`, this protection persists after the appointment has taken place, preventing invalid rebooking of completed sessions.
 3. **Idempotency Protection:** Clients submitting repeated booking requests with the same `Idempotency-Key` header receive the existing booking confirmation rather than creating duplicates.
 
 ### 5.3 Booking Cancellation and Rebooking Consistency
@@ -832,11 +842,12 @@ BEGIN;
 COMMIT;
 ```
 
-**Preserving History while Allowing Rebooking:**
+**Preserving History while Allowing Rebooking (and Locking Completed Sessions):**
 - In a naive design with `UNIQUE(slot_id)`, cancelling a booking would prevent that slot from ever being rebooked because the cancelled record still occupies the unique slot ID.
-- Under our **partial unique index** (`WHERE status = 'CONFIRMED'`), transitioning the existing booking to `status = 'CANCELLED'` automatically removes it from the index constraint.
+- Under our **partial unique index** (`WHERE status IN ('CONFIRMED', 'COMPLETED')`), transitioning the existing booking to `status = 'CANCELLED'` automatically removes it from the index constraint.
 - The slot's status returns to `AVAILABLE`, enabling another student (or the same student) to subsequently book that exact slot.
 - When rebooked, a new row is inserted into `bookings` with `status = 'CONFIRMED'`. Both the old cancelled booking and the new confirmed booking remain in the database, ensuring full auditability, complete cancellation analytics, and no lost counsellor records.
+- **Completed Sessions Permanently Locked:** Once a session occurs and transitions to `status = 'COMPLETED'`, it remains inside the `WHERE status IN ('CONFIRMED', 'COMPLETED')` index predicate forever. Thus, completed slots can never be rebooked, preserving historical and transactional integrity.
 
 ### 5.4 Cross-Database (SQL + Mongo) Integrity
 
@@ -1199,12 +1210,12 @@ SELECT cp.display_name,
          NULLIF(COUNT(DISTINCT CASE WHEN s.status != 'CANCELLED' THEN s.id END), 0),
          2
        ) AS slot_utilization_rate,
-       -- Total sessions successfully completed
-       COUNT(DISTINCT CASE WHEN b.status = 'COMPLETED' THEN b.id END) AS completed_sessions,
-       -- Counsellor fulfillment rate (completed / non-cancelled sessions that reached scheduled time)
+       -- Total sessions successfully completed within the eligible elapsed window
+       COUNT(DISTINCT CASE WHEN b.status = 'COMPLETED' AND s.ends_at <= LEAST(:to, NOW()) THEN b.id END) AS completed_sessions,
+       -- Counsellor fulfillment rate (completed / non-cancelled sessions that reached scheduled time within query window)
        ROUND(
-         COUNT(DISTINCT CASE WHEN b.status = 'COMPLETED' THEN b.id END)::numeric /
-         NULLIF(COUNT(DISTINCT CASE WHEN b.status IN ('CONFIRMED','COMPLETED') AND s.ends_at < NOW() THEN b.id END), 0),
+         COUNT(DISTINCT CASE WHEN b.status = 'COMPLETED' AND s.ends_at <= LEAST(:to, NOW()) THEN b.id END)::numeric /
+         NULLIF(COUNT(DISTINCT CASE WHEN b.status IN ('CONFIRMED','COMPLETED') AND s.ends_at <= LEAST(:to, NOW()) THEN b.id END), 0),
          2
        ) AS session_completion_rate,
        -- Cancellation rate: proportion of total requested bookings that were cancelled
@@ -1414,8 +1425,8 @@ const booking = await prisma.$transaction(async (tx) => {
 
   // Step 3: Insert booking record.
   // Enforced by PostgreSQL partial unique index:
-  // CREATE UNIQUE INDEX uq_bookings_active_slot ON bookings (slot_id) WHERE status = 'CONFIRMED';
-  // Even if application checks were bypassed, the DB rejects concurrent active bookings.
+  // CREATE UNIQUE INDEX uq_bookings_active_or_completed_slot ON bookings (slot_id) WHERE status IN ('CONFIRMED', 'COMPLETED');
+  // Even if application checks were bypassed, the DB rejects concurrent active bookings and protects completed slots.
   const newBooking = await tx.booking.create({
     data: {
       studentId,
@@ -1474,16 +1485,16 @@ const booking = await prisma.$transaction(async (tx) => {
 > [!WARNING]
 > The following items require team agreement before implementation begins.
 
-| # | Decision | Affected Parties | Notes |
-|---|---|---|---|
-| 1 | **Multi-school tenancy (`schoolId`)** | All | Architecture §4 notes this is pending. If required, add `school_id` FK to `users`, `student_profiles`, all queries and RBAC. |
-| 2 | **API contract: `GET /counsellors/me/slots`** | Aradhya, Divy | The API contract (§7) lists this endpoint but it is not defined in the table. The counsellor slot listing endpoint needs to be formally added. |
-| 3 | **Slot overlap prevention strategy** | Aradhya, Divy | Use PostgreSQL exclusion constraint (`EXCLUDE USING gist`) vs. application-layer validation. Exclusion constraints require `btree_gist` extension. |
-| 4 | **`dimensionProfile` field in Career POST body** | Aradhya, Divy | API contract §6 accepts `dimensionProfile` as a flat object in `POST /careers`. Data model stores dimensions in a separate `career_dimensions` table. The service layer must map between these representations. Confirm the API shape. |
-| 5 | **Assessment events collection** | Aradhya, Dhavika | Architecture §6 describes `assessment_events` in Mongo. Dhavika's UI spec does not reference this collection. Confirm if the frontend emits these events or if they are backend-only. |
-| 6 | **Guidance session `sessionId` format** | Aradhya, Dhavika | API contract and AI design use Mongo ObjectId strings for `sessionId`. Confirm this is acceptable or if UUID strings are preferred for consistency. |
-| 7 | **Student age/consent and data retention** | All | Architecture §13 flags this as unresolved. Affects `consent_accepted` field semantics, retention policies, and deletion workflows. Requires mentor approval. |
-| 8 | **Booking cancellation cutoff** | Aradhya, Divy | Architecture §10 proposes no cutoff for MVP demo. Confirm or define a cutoff policy. |
+| # | Decision | Status | Affected Parties | Notes |
+|---|---|---|---|---|
+| 1 | **Multi-school tenancy (`schoolId`)** | Pending Approval | All | Architecture §4 notes this is pending. If required, add `school_id` FK to `users`, `student_profiles`, all queries and RBAC. |
+| 2 | **API contract: `GET /counsellors/me/slots`** | **Resolved** | Aradhya, Divy | Endpoint formally added to `docs/api-contract.md` §7 (returns own slots across all statuses). |
+| 3 | **Slot overlap prevention strategy** | Pending Evaluation | Aradhya, Divy | Use PostgreSQL exclusion constraint (`EXCLUDE USING gist`) vs. application-layer validation. Exclusion constraints require `btree_gist` extension. |
+| 4 | **`dimensionProfile` field in Career POST body** | **Resolved** | Aradhya, Divy | API contract §6 accepts `dimensionProfile` as a key-value object; backend service maps to `career_dimensions` rows via Prisma nested write. |
+| 5 | **Assessment events collection** | Pending Confirmation | Aradhya, Dhavika | Architecture §6 describes `assessment_events` in Mongo. Confirmed as backend-only diagnostic telemetry; frontend emits standard REST actions. |
+| 6 | **Guidance session `sessionId` format** | Pending Confirmation | Aradhya, Dhavika | API contract and AI design use Mongo ObjectId strings for `sessionId`. Confirm this is acceptable or if UUID strings are preferred for consistency. |
+| 7 | **Student age/consent and data retention** | Pending Approval | All | Architecture §13 flags this as unresolved. Affects `consent_accepted` field semantics, retention policies, and deletion workflows. Requires mentor approval. |
+| 8 | **Booking cancellation cutoff** | Pending Approval | Aradhya, Divy | Architecture §10 proposes no cutoff for MVP demo. Confirm or define a cutoff policy. |
 
 ---
 

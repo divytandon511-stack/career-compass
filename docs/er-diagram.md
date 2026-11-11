@@ -97,6 +97,7 @@ erDiagram
         VARCHAR title "NOT NULL, 2..120 chars"
         TEXT description "NULLABLE"
         BOOLEAN published "DEFAULT FALSE"
+        INTEGER profile_version "DEFAULT 1"
         TEXT source_note "NULLABLE"
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
@@ -160,7 +161,7 @@ erDiagram
         UUID id PK
         UUID student_id FK "FK → student_profiles.user_id"
         UUID counsellor_id FK "FK → counsellor_profiles.user_id"
-        UUID slot_id FK "FK → availability_slots.id; partial UK (active)"
+        UUID slot_id FK "FK → availability_slots.id; partial UK (CONFIRMED, COMPLETED)"
         ENUM status "CONFIRMED | COMPLETED | CANCELLED"
         VARCHAR note "NULLABLE, max 500"
         TIMESTAMPTZ created_at
@@ -210,7 +211,7 @@ erDiagram
 
     %% Booking system
     CounsellorProfile ||--o{ AvailabilitySlot : "offers"
-    AvailabilitySlot ||--o{ Booking : "reserved by (historical; max 1 active)"
+    AvailabilitySlot ||--o{ Booking : "reserved by (historical; max 1 active/completed)"
     StudentProfile ||--o{ Booking : "requests"
     CounsellorProfile ||--o{ Booking : "assigned to"
 ```
@@ -232,7 +233,7 @@ The ER diagram above uses `UK` annotations. Below is a consolidated list of all 
 | `careers` | `slug` | UNIQUE | URL-friendly identifier |
 | `skills` | `name` | UNIQUE | No duplicate skill names |
 | `recommendations` | `(attempt_id, career_id)` | UNIQUE | No duplicate recommendations per attempt |
-| `bookings` | `slot_id (partial)` | UNIQUE WHERE status = 'CONFIRMED' | Exactly one active booking per slot while allowing historical cancelled bookings |
+| `bookings` | `slot_id (partial)` | UNIQUE WHERE status IN ('CONFIRMED', 'COMPLETED') | Exactly one active or completed booking per slot while allowing historical cancelled bookings |
 | `email_outbox` | `idempotency_key` | UNIQUE | Prevents duplicate email sends |
 | `refresh_sessions` | `hashed_token_id` | INDEX | Fast lookup for token validation |
 
@@ -244,7 +245,7 @@ The ER diagram above uses `UK` annotations. Below is a consolidated list of all 
 
 - **User → StudentProfile / CounsellorProfile:** Each user has at most one profile of each type. A `STUDENT` role user has a `StudentProfile`; a `COUNSELLOR` role user has a `CounsellorProfile`. The profile's PK is the user's FK, enforcing the 1:1 constraint.
 
-- **AvailabilitySlot → Booking (Active):** Each slot can be linked to at most **one active** (`CONFIRMED`) booking at any given time. This is enforced by PostgreSQL's partial unique index `uq_bookings_active_slot` on `(slot_id) WHERE status = 'CONFIRMED'`.
+- **AvailabilitySlot → Booking (Active/Completed):** Each slot can be linked to at most **one active** (`CONFIRMED`) or completed (`COMPLETED`) booking across its lifecycle. This is enforced by PostgreSQL's partial unique index `uq_bookings_active_or_completed_slot` on `(slot_id) WHERE status IN ('CONFIRMED', 'COMPLETED')`. This ensures that a slot cannot be rebooked once its session is completed, while allowing cancelled slots to be returned to availability.
 
 ### 3.2 One-to-Many (1:N)
 
@@ -278,14 +279,15 @@ The most critical data integrity requirement is preventing two students from boo
 A naive `UNIQUE(slot_id)` constraint would prevent any cancelled slot from ever being rebooked, because the cancelled booking row would still hold that `slot_id`. We solve this by defining a **partial unique index** in PostgreSQL:
 
 ```sql
--- Guarantees at most ONE active (CONFIRMED) booking per slot at any time.
--- Cancelled bookings remain in the table for history and auditing without blocking rebooking.
-CREATE UNIQUE INDEX uq_bookings_active_slot
+-- Guarantees at most ONE active (CONFIRMED) or completed (COMPLETED) booking per slot across its lifecycle.
+-- Cancelled bookings drop out of the partial index, permitting valid rebooking while preserving historical audit records.
+-- Completed bookings remain in the index, permanently preventing completed sessions from being rebooked.
+CREATE UNIQUE INDEX uq_bookings_active_or_completed_slot
 ON bookings (slot_id)
-WHERE status = 'CONFIRMED';
+WHERE status IN ('CONFIRMED', 'COMPLETED');
 ```
 
-Even if application logic fails or transaction isolation is misconfigured, the PostgreSQL engine will reject any concurrent attempt to insert a second `CONFIRMED` booking for the same slot with a unique violation (`23505`), which the service layer catches and maps to `409 Conflict (SLOT_UNAVAILABLE)`.
+Even if application logic fails or transaction isolation is misconfigured, the PostgreSQL engine will reject any concurrent attempt to insert a duplicate active booking for the same slot with a unique violation (`23505`), which the service layer catches and maps to `409 Conflict (SLOT_UNAVAILABLE)`. Furthermore, once a booking reaches `COMPLETED`, the slot cannot be rebooked under any circumstance.
 
 ### 4.2 Application Concurrency Strategies: Atomic Update & Row Locking
 
@@ -373,8 +375,8 @@ BEGIN;
 COMMIT;
 ```
 
-**Why Rebooking Works:**
-Because the partial index only enforces uniqueness where `status = 'CONFIRMED'`, setting the existing booking to `'CANCELLED'` removes it from the partial index restriction. The slot is marked `'AVAILABLE'`, allowing another student to book the slot later. When rebooked, a new `CONFIRMED` booking is inserted, preserving both the cancelled and new bookings in the database.
+**Why Rebooking Works (and Completed Slots are Protected):**
+Because the partial index only enforces uniqueness where `status IN ('CONFIRMED', 'COMPLETED')`, setting an active booking to `'CANCELLED'` removes it from the partial index restriction. The slot is marked `'AVAILABLE'`, allowing another student to book the slot later. When rebooked, a new `CONFIRMED` booking is inserted, preserving both the cancelled and new bookings in the database. Crucially, once a session is held and transitioned from `CONFIRMED` to `COMPLETED`, it remains within the indexed set, permanently preventing the completed slot from being booked again.
 
 ---
 
@@ -483,10 +485,11 @@ The ER diagram entities map directly to the REST API resources defined in `docs/
 | `GET /careers/:idOrSlug` | `Career` JOIN `CareerDimension`, `CareerSkill`/`Skill`, `EducationPathway` | Full detail |
 | `PUT /users/me/saved-careers/:careerId` | `SavedCareer` | Idempotent upsert |
 | `GET /counsellors/:id/slots` | `AvailabilitySlot` | Filtered by date range |
+| `GET /counsellors/me/slots` | `AvailabilitySlot` | Counsellor self-management of availability slots (all statuses) |
 | `POST /bookings` | `Booking`, `AvailabilitySlot`, `EmailOutbox` | Transaction with FOR UPDATE |
 | `POST /guidance/sessions` | MongoDB `guidance_sessions` | After SQL validation |
 | `POST /guidance/sessions/:id/messages` | MongoDB `guidance_sessions` (message append) | After SQL data fetch |
 
 > [!NOTE]
-> **Open item:** The API contract (§7) references `GET /counsellors/me/slots` in the UI specification route mapping, but this endpoint is not formally defined in the API contract table. It should be added for counsellor self-management of slots. See `docs/data-model.md` §9, item #2.
+> **Resolution Note:** The endpoint `GET /counsellors/me/slots` referenced in the UI specification has been formally added to `docs/api-contract.md` §7, enabling counsellors to list and manage their own availability slots across all statuses. See `docs/data-model.md` §9, item #2.
 
