@@ -5,7 +5,7 @@
 **Project:** Develop Effective Career Counselling and Guidance Programs in Schools to Enhance Student Career Choices
 
 ## 1. Purpose and scope
-CareerCompass helps school students understand interests and strengths, explore educational pathways, receive **explainable, non-deterministic** career suggestions, and request counsellor appointments. Counsellors manage assigned sessions; admins maintain reference data and view privacy-preserving aggregate trends. The system is guidance, not a psychological diagnosis or guarantee of career suitability.
+CareerCompass helps school students understand interests and strengths, explore educational pathways, receive **explainable, deterministic** career suggestions, and request counsellor appointments. Counsellors manage assigned sessions; admins maintain reference data and view privacy-preserving aggregate trends. The system is guidance, not a psychological diagnosis or guarantee of career suitability.
 
 ### MVP acceptance journeys
 1. Student registers, verifies eligibility/consent as required by school policy, logs in, completes an assessment, and receives ranked recommendations with reasons.
@@ -91,14 +91,14 @@ All three review integration PRs and understand the entire system for the viva. 
 | `Question` | id, assessmentId, dimension, prompt, position, weight, options | N:1 Assessment |
 | `AssessmentAttempt` | id, studentId, assessmentId, version, status, startedAt, completedAt, scoresJson | 1:N Answer, Recommendation |
 | `Answer` | attemptId + questionId unique, selectedOption/score | N:1 Attempt, N:1 Question |
-| `Career` | id, slug unique, title, description, published | N:M Skill via CareerSkill; 1:N Pathway |
+| `Career` | id, slug unique, title, description, published, profileVersion | N:M Skill via CareerSkill; 1:N Pathway |
 | `Skill` / `CareerSkill` | skill id; (careerId, skillId) unique, weight | N:M Careers |
 | `CareerDimension` | careerId + dimension unique, targetWeight [0,1] | N:1 Career; matching vector |
 | `EducationPathway` | careerId, stage, qualification, notes, verifiedAt | N:1 Career |
-| `Recommendation` | attemptId + careerId unique, rank, score, explanationJson, algorithmVersion | N:1 Attempt/Career |
+| `Recommendation` | attemptId + careerId unique, rank, score, explanationJson (with dimension snapshot), algorithmVersion | N:1 Attempt/Career |
 | `SavedCareer` | studentId + careerId unique | N:1 Student/Career |
-| `AvailabilitySlot` | counsellorId, startsAt, endsAt, status | 1:0..1 active Booking |
-| `Booking` | id, studentId, counsellorId, slotId, status, createdAt | N:1 Student/Counsellor; slot uniqueness |
+| `AvailabilitySlot` | counsellorId, startsAt, endsAt, status | 1:0..1 active/completed Booking |
+| `Booking` | id, studentId, counsellorId, slotId, status, createdAt | N:1 Student/Counsellor; slot uniqueness on active/completed (`CONFIRMED`, `COMPLETED`) |
 | `RefreshSession` | id, userId, hashedTokenId, expiresAt, revokedAt, rotatedFrom | N:1 User |
 | `EmailOutbox` | id, eventType, payload, status, attempts, nextAttemptAt | reliable notification dispatch |
 
@@ -117,7 +117,7 @@ Use UTC timestamps, database foreign keys and unique constraints. Preserve asses
 2. For each dimension `d`, compute `raw_d = Σ(answerValue_q × weight_q)` and `max_d = Σ(4 × weight_q)` for answered required questions. Normalize `student_d = raw_d / max_d`, in `[0,1]`. Reject incomplete required submissions instead of silently altering denominators.
 3. Each curated career has a nonnegative vector `career_d ∈ [0,1]` with at least one nonzero element, reviewed by the catalogue owner.
 4. Weighted cosine similarity: `similarity(s,c) = Σ_d w_d s_d c_d / (sqrt(Σ_d w_d s_d²) × sqrt(Σ_d w_d c_d²))`, with `w_d > 0`, default all 1. If either norm is zero, return score `0` and mark low-information assessment; never divide by zero.
-5. Sort descending similarity; tie-break by career slug/ID for deterministic output. Persist `algorithmVersion`, `assessmentVersion`, raw dimension scores, normalized vector, rank and similarity (0..1). Do **not** display similarity as probability of success or suitability.
+5. Sort descending similarity; tie-break by career slug/ID for deterministic output. Persist `algorithmVersion`, `assessmentVersion`, raw dimension scores, normalized vector, rank, similarity (0..1), and snapshot the career dimension weights used at calculation time in `explanationJson` (alongside `careerProfileVersion`). Each `algorithmVersion` (e.g. `cosine-v1`) identifies an immutable, versioned configuration of global dimension weights $w_d$ (default unit weights $w_d = 1.0$ for all dimensions); if non-default global weights are used, they are either defined within an immutable versioned algorithm specification or snapshotted in `explanationJson.algorithmWeights`. Combined with student normalized scores (`scoresJson`) and career dimension snapshots, this guarantees 100% mathematical reproducibility of historical recommendations without schema changes. Do **not** display similarity as probability of success or suitability.
 6. Explain top contributing dimensions and mismatches from actual vector data; allow student to compare alternatives. Do not use protected traits, identity, socioeconomic status or demographic proxies to rank careers.
 
 **Example:** If normalized student scores are `ANALYTICAL=.9, CREATIVE=.3` and a career profile is `.8, .2`, cosine is high because vector directions align. This is a similarity measure, not a validated career prediction.
@@ -143,7 +143,7 @@ Count assessments, top interest dimensions, booking utilization and career saves
 
 ## 10. Booking correctness and email
 - Counsellor creates future, non-overlapping slots; store UTC and show local timezone in UI.
-- Student books a slot via one PostgreSQL transaction: verify available, prevent double booking using a unique active-slot constraint or atomic conditional update plus unique index, create booking, mark slot booked, write `EmailOutbox` event. Do not rely on UI disabling alone.
+- Student books a slot via one PostgreSQL transaction: verify available, prevent double booking using an atomic conditional update plus a partial unique index on `(slot_id) WHERE status IN ('CONFIRMED', 'COMPLETED')`, create booking, mark slot booked, write `EmailOutbox` event. Do not rely on UI disabling alone. Completed sessions permanently retain their index presence to prevent invalid rebooking.
 - Booking cancellation updates status and slot availability atomically; define cutoff policy (proposed no cutoff in demo MVP, pending approval). Concurrency tests must simulate two students booking the same slot.
 - Outbox worker sends email asynchronously with retries/backoff and idempotency key. If email fails, **booking remains confirmed**; show notification status separately. Never include sensitive assessment answers in email.
 

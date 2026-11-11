@@ -88,9 +88,9 @@ Only the owning student can change an `IN_PROGRESS` attempt. Answer PUT is idemp
 
 **Recommendation response example:**
 ```json
-{"data":[{"career":{"id":"33333333-3333-4333-8333-333333333333","slug":"software-developer","title":"Software Developer"},"rank":1,"similarityScore":0.92,"algorithmVersion":"cosine-v1","reasons":["Strong alignment with analytical interests","Strong alignment with investigative interests"],"cautions":["Explore day-to-day work before deciding"]}],"meta":{"page":1,"limit":20,"total":1,"totalPages":1}}
+{"data":[{"career":{"id":"33333333-3333-4333-8333-333333333333","slug":"software-developer","title":"Software Developer"},"rank":1,"similarityScore":0.92,"algorithmVersion":"cosine-v1","careerProfileVersion":1,"reasons":["Strong alignment with analytical interests","Strong alignment with investigative interests"],"cautions":["Explore day-to-day work before deciding"]}],"meta":{"page":1,"limit":20,"total":1,"totalPages":1}}
 ```
-`similarityScore` is a vector similarity, not a probability of career success. Results reference a completed own attempt. Ranking is deterministic: score descending then slug ascending.
+`similarityScore` is a vector similarity, not a probability of career success. Results reference a completed own attempt. Ranking is deterministic: score descending then slug ascending. Historical recommendation reproducibility is guaranteed: the backend scoring service captures the exact career dimension weights used at calculation time inside `explanationJson.dimensionSnapshot` (accompanied by `careerProfileVersion`), while global algorithm dimension weights ($w_d$) are immutably tied to the versioned `algorithmVersion` (e.g. `cosine-v1` defines immutable unit weights $w_d = 1.0$ across all 6 dimensions) and optionally snapshotted in `explanationJson.algorithmWeights`. This ensures historical results can be audited and recalculated at any future date even if live catalogue weights or matching configurations evolve.
 
 ## 6. Career catalogue, skills and pathways
 | Method | Endpoint | Access | Input | Success | Errors |
@@ -106,7 +106,7 @@ Only the owning student can change an `IN_PROGRESS` attempt. Answer PUT is idemp
 | POST | `/careers/:id/pathways` | ADMIN | `{stage,qualification,notes,verifiedAt?}` | 201 pathway | 403,404,422 |
 | PATCH | `/pathways/:id` | ADMIN | mutable fields | 200 pathway | 403,404,422 |
 
-`slug` lowercase kebab-case, unique; `title` 2..120 chars; `dimensionProfile` must contain every supported dimension, each finite in `[0,1]`, at least one nonzero. Published catalogue records must be human-reviewed and include a source/verification note in the database design. No unverified salary/admission claims.
+`slug` lowercase kebab-case, unique; `title` 2..120 chars; `dimensionProfile` is supplied in `POST /careers` as a key-value object containing every supported dimension (each finite in `[0,1]`, at least one nonzero), which the backend service layer maps to `career_dimensions` records within a Prisma nested write. Published catalogue records must be human-reviewed and include a source/verification note in the database design. No unverified salary/admission claims.
 
 **Career list example:**
 ```http
@@ -122,6 +122,7 @@ GET /api/v1/careers?q=software&sort=title&order=asc&page=1&limit=10
 | GET | `/counsellors` | AUTH | `page,limit,q?,sort=displayName,order` | 200 active counsellors | 401 |
 | GET | `/counsellors/:id` | AUTH | ID | 200 public profile | 401,404 |
 | GET | `/counsellors/:id/slots` | AUTH | `from,to,page,limit` | 200 available future slots | 401,404,422 |
+| GET | `/counsellors/me/slots` | COUNSELLOR | `from?,to?,page,limit` | 200 own availability slots (all statuses) | 401,403,422 |
 | POST | `/counsellors/me/slots` | COUNSELLOR | `{startsAt,endsAt}` | 201 slot | 401,403,409,422 |
 | DELETE | `/counsellors/me/slots/:id` | COUNSELLOR | ID | 204 if unbooked | 403,404,409 |
 | POST | `/bookings` | STUDENT | `{slotId,note?}` | 201 booking | 401,403,404,409,422 |
@@ -129,7 +130,10 @@ GET /api/v1/careers?q=software&sort=title&order=asc&page=1&limit=10
 | GET | `/bookings/:id` | STUDENT,COUNSELLOR | ID | 200 own/assigned booking | 401,404 |
 | PATCH | `/bookings/:id/status` | STUDENT,COUNSELLOR | `{status}` | 200 updated booking | 401,403,404,409,422 |
 
-Booking note max 500 characters and should exclude sensitive data. Students may cancel their own confirmed bookings; counsellors may mark assigned bookings `COMPLETED` or `CANCELLED` according to allowed state transitions. Clients cannot directly set arbitrary status.
+Booking note max 500 characters and should exclude sensitive data. Permitted status transitions for `PATCH /bookings/:id/status`:
+- `STUDENT`: Can transition own booking `CONFIRMED → CANCELLED`.
+- `COUNSELLOR`: Can transition assigned booking `CONFIRMED → COMPLETED` (session conducted) or `CONFIRMED → CANCELLED`.
+- Terminal states: Once a booking is `COMPLETED` or `CANCELLED`, no further transitions are allowed; attempts return `409 Conflict`. Clients cannot directly set `CONFIRMED` via PATCH.
 
 **Booking example:**
 ```http
@@ -142,7 +146,7 @@ Content-Type: application/json
 ```json
 {"data":{"id":"55555555-5555-4555-8555-555555555555","slotId":"44444444-4444-4444-8444-444444444444","status":"CONFIRMED","startsAt":"2026-11-15T09:00:00Z","notificationStatus":"PENDING"}}
 ```
-**Concurrency rule:** SQL transaction must atomically reserve a slot, with database uniqueness/conditional state update. Exactly one concurrent request succeeds; other receives `409 SLOT_UNAVAILABLE`. Repeated same request can use optional `Idempotency-Key` (UUID, scoped to user and route, retained 24h); replay returns same result. Email dispatch occurs asynchronously from an outbox and does not roll back confirmed bookings.
+**Concurrency rule:** SQL transaction must atomically reserve a slot using conditional update (`UPDATE availability_slots SET status = 'BOOKED' WHERE id = :slotId AND status = 'AVAILABLE'`) backed by PostgreSQL partial unique index `uq_bookings_active_or_completed_slot` on `bookings (slot_id) WHERE status IN ('CONFIRMED', 'COMPLETED')`. Exactly one concurrent request succeeds; other receives `409 SLOT_UNAVAILABLE`. Repeated same request can use optional `Idempotency-Key` (UUID, scoped to user and route, retained 24h); replay returns same result. If a booking is cancelled, it drops out of the partial index to allow valid rebooking; once marked `COMPLETED`, the booking remains permanently indexed, preventing any invalid rebooking of completed sessions. Email dispatch occurs asynchronously from an outbox and does not roll back confirmed bookings.
 
 ## 8. AI guidance and MongoDB history
 | Method | Endpoint | Access | Input | Success | Errors |

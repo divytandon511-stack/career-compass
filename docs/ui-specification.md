@@ -417,7 +417,7 @@ flowchart TD
 2. **Empty States:** When API arrays return `data: []` (e.g. no saved careers, no bookings):
    - Clear illustration or icon.
    - Informative message: *"You haven't bookmarked any careers yet."*
-   - Direct action CTA: *"Browse 50+ Career Blueprints →"*.
+   - Direct action CTA: *"Browse Curated Career Blueprints →"* (The MVP catalogue features 10–15 curated careers; 50+ careers represent the planned post-MVP catalogue expansion target).
 3. **Error Handling & 422 Mapping:**
    - Server errors in standardized envelope `{ error: { code, message, details } }` are automatically mapped to React Hook Form field errors matching the `field` property.
    - Non-field errors appear in a prominent, dismissible `<AlertBanner>`.

@@ -8,3 +8,7 @@ Responsibilities:
 - Student dashboard
 - AI career guidance interface
 - Frontend and backend integration
+
+Associated Documentation:
+- [Frontend UI/UX Specification](ui-specification.md)
+- [AI Guidance System Design](ai-guidance-design.md)
