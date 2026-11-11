@@ -5,6 +5,12 @@ import { z } from 'zod';
 dotenv.config();
 
 /**
+ * Clearly labeled synthetic secret used exclusively in automated test suites (NODE_ENV=test).
+ * Strictly forbidden in development and production runtimes.
+ */
+export const SYNTHETIC_TEST_JWT_SECRET = 'synthetic-test-jwt-secret-minimum-32-characters-vitest-runner';
+
+/**
  * Validates whether an origin string is a well-formed HTTP or HTTPS origin without paths, queries, or wildcards.
  */
 const validateOrigin = (origin) => {
@@ -68,7 +74,41 @@ export const envSchema = z.object({
       message: 'BODY_LIMIT must be a size string between 1B and 10MB with unit b, kb, or mb (e.g. "100kb", "1mb")',
     })
     .default('100kb'),
-});
+  JWT_SECRET: z
+    .string({ invalid_type_error: 'JWT_SECRET must be a string' })
+    .min(32, { message: 'JWT_SECRET must be at least 32 characters long' })
+    .optional(),
+  JWT_EXPIRES_IN: z.coerce
+    .number({ invalid_type_error: 'JWT_EXPIRES_IN must be an integer' })
+    .int()
+    .positive({ message: 'JWT_EXPIRES_IN must be a positive integer' })
+    .default(900),
+  JWT_ISSUER: z.string().default('career-compass'),
+  JWT_AUDIENCE: z.string().default('career-compass-client'),
+}).refine(
+  (data) => {
+    // Only automated test suites running with NODE_ENV=test may omit JWT_SECRET
+    if (data.NODE_ENV === 'test') {
+      return true;
+    }
+
+    // In all non-test environments (development, production), JWT_SECRET is strictly required
+    if (!data.JWT_SECRET || typeof data.JWT_SECRET !== 'string' || data.JWT_SECRET.trim().length < 32) {
+      return false;
+    }
+
+    // Never permit using the predictable synthetic test secret in development or production
+    if (data.JWT_SECRET === SYNTHETIC_TEST_JWT_SECRET) {
+      return false;
+    }
+
+    return true;
+  },
+  {
+    message: 'JWT_SECRET is required and must be at least 32 characters long in development and production environments',
+    path: ['JWT_SECRET'],
+  }
+);
 
 /**
  * Validates raw environment configuration without leaking secrets
@@ -85,8 +125,14 @@ export const validateEnv = (rawEnv = process.env) => {
     throw new Error(`[Config Error] Invalid environment configuration:\n${issues}`);
   }
 
+  // Only assign synthetic test secret when NODE_ENV is strictly 'test' and no secret was supplied
+  const jwtSecret =
+    result.data.JWT_SECRET ||
+    (result.data.NODE_ENV === 'test' ? SYNTHETIC_TEST_JWT_SECRET : undefined);
+
   return {
     ...result.data,
+    JWT_SECRET: jwtSecret,
     corsOrigins: result.data.ALLOWED_ORIGINS.split(',')
       .map((origin) => origin.trim())
       .filter(Boolean),
