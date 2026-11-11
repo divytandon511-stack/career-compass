@@ -5,6 +5,8 @@ import { AppError } from './app-error.js';
 
 export const ALLOWED_ROLES = ['STUDENT', 'COUNSELLOR', 'ADMIN'];
 export const ALLOWED_JWT_ALGORITHMS = ['HS256'];
+export const MIN_ACCESS_TOKEN_LIFETIME = 1;
+export const MAX_ACCESS_TOKEN_LIFETIME = 900;
 
 const uuidSchema = z.string().uuid({ message: 'User id/sub must be a valid UUID' });
 const roleSchema = z.enum(ALLOWED_ROLES, { message: `User role must be one of: ${ALLOWED_ROLES.join(', ')}` });
@@ -12,7 +14,7 @@ const emailSchema = z.string().trim().email({ message: 'User email must be a val
 
 /**
  * Validates and resolves the active JWT configuration.
- * Enforces minimum secret length (32 characters), algorithm allowlist, and valid TTL.
+ * Enforces minimum secret length (32 characters), algorithm allowlist, and bounded lifetime (1 to 900 seconds).
  *
  * @param {Record<string, unknown>} [overrides={}]
  * @returns {{ secret: string, algorithm: string, expiresIn: number, issuer: string, audience: string }}
@@ -34,10 +36,27 @@ export const getJwtConfig = (overrides = {}) => {
     throw new Error(`JWT signing algorithm must be one of: ${ALLOWED_JWT_ALGORITHMS.join(', ')}`);
   }
 
+  const rawExpiresIn = 'expiresIn' in overrides ? overrides.expiresIn : (env.JWT_EXPIRES_IN || 900);
+  const expiresIn = typeof rawExpiresIn === 'string' && /^\d+$/.test(rawExpiresIn.trim())
+    ? parseInt(rawExpiresIn.trim(), 10)
+    : Number(rawExpiresIn);
+
+  if (
+    typeof expiresIn !== 'number' ||
+    !Number.isFinite(expiresIn) ||
+    !Number.isInteger(expiresIn) ||
+    expiresIn < MIN_ACCESS_TOKEN_LIFETIME ||
+    expiresIn > MAX_ACCESS_TOKEN_LIFETIME
+  ) {
+    throw new Error(
+      `JWT expiration lifetime must be a positive integer between ${MIN_ACCESS_TOKEN_LIFETIME} and ${MAX_ACCESS_TOKEN_LIFETIME} seconds`
+    );
+  }
+
   return {
     secret,
     algorithm,
-    expiresIn: overrides.expiresIn !== undefined ? Number(overrides.expiresIn) : (env.JWT_EXPIRES_IN || 900),
+    expiresIn,
     issuer: overrides.issuer || env.JWT_ISSUER || 'career-compass',
     audience: overrides.audience || env.JWT_AUDIENCE || 'career-compass-client',
   };
@@ -95,6 +114,7 @@ export const signAccessToken = (user, options = {}) => {
  * Verifies and decodes a signed access JWT.
  * Enforces algorithm allowlist, issuer, audience, and signature validity.
  * Validates that decoded subject is a UUID and role belongs to allowlist.
+ * Returns sanitized, generic error envelopes without exposing internal jsonwebtoken messages.
  *
  * IMPORTANT ARCHITECTURAL INVARIANT:
  * Successful cryptographic token verification alone does NOT prove that the user
@@ -110,6 +130,7 @@ export const verifyAccessToken = (token, options = {}) => {
     throw new AppError('UNAUTHORIZED', 'Authentication token must be a non-empty string', 401);
   }
 
+  // Configuration resolution: genuine configuration errors bubble up as standard errors
   const config = getJwtConfig(options);
 
   let decoded;
@@ -127,31 +148,28 @@ export const verifyAccessToken = (token, options = {}) => {
       throw error;
     }
 
-    if (err.name === 'JsonWebTokenError') {
-      throw new AppError('INVALID_TOKEN', err.message || 'Invalid authentication token', 401);
-    }
-
-    throw err;
+    // Generic sanitized error: do not expose raw jsonwebtoken messages to callers
+    throw new AppError('INVALID_TOKEN', 'Invalid authentication token', 401);
   }
 
-  // Validate decoded claims after cryptographic verification
+  // Validate decoded claims after cryptographic verification; return generic error on failure
   if (!decoded || typeof decoded !== 'object') {
-    throw new AppError('INVALID_TOKEN', 'Token payload is malformed', 401);
+    throw new AppError('INVALID_TOKEN', 'Invalid authentication token', 401);
   }
 
   const subjectValidation = uuidSchema.safeParse(decoded.sub);
   if (!subjectValidation.success) {
-    throw new AppError('INVALID_TOKEN', 'Token subject claim must be a valid UUID', 401);
+    throw new AppError('INVALID_TOKEN', 'Invalid authentication token', 401);
   }
 
   const roleValidation = roleSchema.safeParse(decoded.role);
   if (!roleValidation.success) {
-    throw new AppError('INVALID_TOKEN', 'Token role claim is invalid', 401);
+    throw new AppError('INVALID_TOKEN', 'Invalid authentication token', 401);
   }
 
   const emailValidation = emailSchema.safeParse(decoded.email);
   if (!emailValidation.success) {
-    throw new AppError('INVALID_TOKEN', 'Token email claim is invalid', 401);
+    throw new AppError('INVALID_TOKEN', 'Invalid authentication token', 401);
   }
 
   return decoded;

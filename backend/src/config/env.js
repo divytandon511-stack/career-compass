@@ -80,8 +80,9 @@ export const envSchema = z.object({
     .optional(),
   JWT_EXPIRES_IN: z.coerce
     .number({ invalid_type_error: 'JWT_EXPIRES_IN must be an integer' })
-    .int()
-    .positive({ message: 'JWT_EXPIRES_IN must be a positive integer' })
+    .int({ message: 'JWT_EXPIRES_IN must be an integer' })
+    .min(1, { message: 'JWT_EXPIRES_IN must be between 1 and 900 seconds' })
+    .max(900, { message: 'JWT_EXPIRES_IN must be between 1 and 900 seconds' })
     .default(900),
   JWT_ISSUER: z.string().default('career-compass'),
   JWT_AUDIENCE: z.string().default('career-compass-client'),
