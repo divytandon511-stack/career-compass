@@ -12,4 +12,7 @@ export {
   createAuthLimiter,
   loginRateLimiter,
   registerRateLimiter,
+  refreshRateLimiter,
 } from './rate-limit.js';
+export { cookieParserMiddleware, parseCookies } from './cookie-parser.js';
+export { createCsrfProtection } from './csrf.js';

@@ -55,3 +55,13 @@ export const registerRateLimiter = createAuthLimiter({
   max: 5,
   message: 'Too many account registration attempts, please try again later.',
 });
+
+/**
+ * Rate limiter pre-configured for token refresh endpoints.
+ * Stricter limit: 30 requests per 15-minute window per IP.
+ */
+export const refreshRateLimiter = createAuthLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: 'Too many token refresh attempts, please try again later.',
+});
