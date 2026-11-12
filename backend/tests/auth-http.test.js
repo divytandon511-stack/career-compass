@@ -13,6 +13,7 @@ import { SYNTHETIC_TEST_JWT_SECRET } from '../src/config/env.js';
 import { createAuthLimiter } from '../src/middleware/rate-limit.js';
 import { parseCookies } from '../src/middleware/cookie-parser.js';
 import { extractRefreshCookie } from '../src/utils/cookie.js';
+import { createAuthRouter } from '../src/routes/auth.routes.js';
 
 /**
  * In-test fake repository adhering to AuthRepositoryInterface.
@@ -1475,6 +1476,74 @@ describe('CareerCompass — Stage 4 Authentication HTTP Integration', () => {
 
       expect(resExtraField.status).toBe(422);
       expect(resExtraField.body.error.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('Auth Router Dependency Hardening', () => {
+    it('throws immediately when authService dependency is missing', () => {
+      expect(() => createAuthRouter({ authenticate })).toThrowError(
+        'createAuthRouter requires an authService dependency'
+      );
+    });
+
+    it('throws immediately when authenticate dependency is missing', () => {
+      expect(() => createAuthRouter({ authService })).toThrowError(
+        'createAuthRouter requires an authenticate middleware function dependency'
+      );
+    });
+
+    it('throws immediately when authenticate dependency is not a function', () => {
+      expect(() => createAuthRouter({ authService, authenticate: 'not-a-function' })).toThrowError(
+        'createAuthRouter requires an authenticate middleware function dependency'
+      );
+      expect(() => createAuthRouter({ authService, authenticate: {} })).toThrowError(
+        'createAuthRouter requires an authenticate middleware function dependency'
+      );
+      expect(() => createAuthRouter({ authService, authenticate: null })).toThrowError(
+        'createAuthRouter requires an authenticate middleware function dependency'
+      );
+    });
+
+    it('successfully instantiates router when valid authenticate function is provided', () => {
+      const router = createAuthRouter({ authService, authenticate });
+      expect(router).toBeDefined();
+      expect(typeof router).toBe('function');
+    });
+
+    it('rejects logout with 401 when Authorization header is present with malformed Bearer scheme', async () => {
+      const res = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('Origin', TRUSTED_ORIGIN)
+        .set('Authorization', 'InvalidScheme some-token')
+        .send({ allDevices: false });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('UNAUTHORIZED');
+      expect(res.body.error.message).toBe('Authorization header must follow Bearer <token> format');
+    });
+
+    it('succeeds with 204 on single-session cookie logout when Authorization header is absent', async () => {
+      await authService.register({
+        email: 'cookie.logout@example.test',
+        password: 'Password123!@#',
+        displayName: 'Cookie Logout',
+        schoolGrade: '11',
+        consentAccepted: true,
+      });
+
+      const loginRes = await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email: 'cookie.logout@example.test', password: 'Password123!@#' });
+
+      const cookieHeader = loginRes.headers['set-cookie'][0].split(';')[0];
+
+      const res = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('Origin', TRUSTED_ORIGIN)
+        .set('Cookie', cookieHeader);
+
+      expect(res.status).toBe(204);
+      expect(res.text).toBe('');
     });
   });
 });

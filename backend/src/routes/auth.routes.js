@@ -31,17 +31,23 @@ export const createAuthRouter = ({
   refreshLimiter = refreshRateLimiter,
   csrfProtection,
 } = {}) => {
+  if (!authService) {
+    throw new Error('createAuthRouter requires an authService dependency');
+  }
+
+  if (typeof authenticate !== 'function') {
+    throw new Error('createAuthRouter requires an authenticate middleware function dependency');
+  }
+
   const router = Router();
   const controller = createAuthController({ authService, isSecure });
 
   const csrf = csrfProtection || createCsrfProtection({ allowedOrigins });
 
-  // Optional authentication helper for logout: runs authenticate if Authorization header is present
+  // Optional authentication helper for logout: strictly runs authenticate if Authorization header is present
   const optionalAuthenticate = (req, res, next) => {
     if (req.headers.authorization || req.headers.Authorization) {
-      if (typeof authenticate === 'function') {
-        return authenticate(req, res, next);
-      }
+      return authenticate(req, res, next);
     }
     next();
   };
