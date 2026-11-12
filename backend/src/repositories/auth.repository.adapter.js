@@ -152,6 +152,15 @@ export class AuthRepositoryAdapter extends AuthRepositoryInterface {
   async createStudentUser({ email, passwordHash, displayName, schoolGrade, consentAccepted }) {
     this._ensureDelegate('user');
 
+    // Fail closed: interactive database transaction is mandatory for multi-table creation
+    if (typeof this.dbClient.$transaction !== 'function') {
+      const error = new Error(
+        'Database transaction capability ($transaction) is required for atomic student user creation'
+      );
+      error.code = 'TRANSACTION_UNAVAILABLE';
+      throw error;
+    }
+
     const normalizedEmail = email.trim().toLowerCase();
 
     const creationOperation = async (client) => {
@@ -184,11 +193,7 @@ export class AuthRepositoryAdapter extends AuthRepositoryInterface {
     };
 
     try {
-      // Execute within interactive transaction if supported by persistence client
-      if (typeof this.dbClient.$transaction === 'function') {
-        return await this.dbClient.$transaction(async (tx) => creationOperation(tx));
-      }
-      return await creationOperation(this.dbClient);
+      return await this.dbClient.$transaction(async (tx) => creationOperation(tx));
     } catch (err) {
       this._mapDatabaseError(err, 'createStudentUser');
     }
@@ -339,6 +344,15 @@ export class AuthRepositoryAdapter extends AuthRepositoryInterface {
   async rotateRefreshSession({ oldSessionId, newHashedTokenId, newExpiresAt, userId }) {
     this._ensureDelegate('refreshSession');
 
+    // Fail closed: interactive database transaction is mandatory for atomic rotation
+    if (typeof this.dbClient.$transaction !== 'function') {
+      const error = new Error(
+        'Database transaction capability ($transaction) is required for atomic refresh session rotation'
+      );
+      error.code = 'TRANSACTION_UNAVAILABLE';
+      throw error;
+    }
+
     if (!isValidSha256DigestFormat(newHashedTokenId)) {
       throw new Error('newHashedTokenId must be a 64-character lowercase hex digest');
     }
@@ -393,14 +407,20 @@ export class AuthRepositoryAdapter extends AuthRepositoryInterface {
     };
 
     try {
-      if (typeof this.dbClient.$transaction === 'function') {
-        return await this.dbClient.$transaction(async (tx) => rotationOperation(tx));
-      }
-      return await rotationOperation(this.dbClient);
+      return await this.dbClient.$transaction(async (tx) => rotationOperation(tx));
     } catch (err) {
-      // If unique constraint fails on rotatedFrom, another rotation won the race
-      if (err.code === 'P2002' || (err.message && err.message.includes('rotated_from'))) {
-        return null;
+      // Only classify confirmed predecessor-rotation conflicts (rotatedFrom collision) as ordinary lost races.
+      // Do NOT automatically treat every Prisma P2002 error (such as hashedTokenId collision) as a lost rotation.
+      if (err.code === 'P2002') {
+        const target = err.meta?.target;
+        const isRotatedFromConflict =
+          (Array.isArray(target) && target.some((t) => t === 'rotated_from' || t === 'rotatedFrom')) ||
+          (typeof target === 'string' && (target.includes('rotated_from') || target.includes('rotatedFrom')));
+
+        if (isRotatedFromConflict) {
+          // Confirmed lost rotation race: predecessor already has an inserted successor
+          return null;
+        }
       }
       this._mapDatabaseError(err, 'rotateRefreshSession');
     }

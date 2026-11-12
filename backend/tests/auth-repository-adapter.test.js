@@ -326,6 +326,31 @@ describe('AuthRepositoryAdapter & Rotation Rules (Stage 5A)', () => {
         code: 'P2002',
       });
     });
+
+    it('fails closed and makes zero database writes when $transaction is missing during student registration', async () => {
+      const clientWithoutTx = {
+        user: mock.client.user,
+        // $transaction is missing
+      };
+      const adapterWithoutTx = new AuthRepositoryAdapter({ dbClient: clientWithoutTx });
+
+      const initialUserCount = mock.users.size;
+
+      await expect(
+        adapterWithoutTx.createStudentUser({
+          email: 'notx@example.test',
+          passwordHash: 'hash',
+          displayName: 'No Tx',
+          consentAccepted: true,
+        })
+      ).rejects.toMatchObject({
+        code: 'TRANSACTION_UNAVAILABLE',
+        message: expect.stringContaining('$transaction'),
+      });
+
+      // Zero writes occurred
+      expect(mock.users.size).toBe(initialUserCount);
+    });
   });
 
   describe('3. Refresh Session Creation & Token Privacy Invariant', () => {
@@ -510,7 +535,31 @@ describe('AuthRepositoryAdapter & Rotation Rules (Stage 5A)', () => {
       expect(result).toBeNull();
     });
 
-    it('returns null and triggers rollback when duplicate successor insertion fails with P2002 on rotatedFrom', async () => {
+    it('fails closed and makes zero database writes when $transaction is missing during refresh rotation', async () => {
+      const clientWithoutTx = {
+        refreshSession: mock.client.refreshSession,
+        // $transaction is missing
+      };
+      const adapterWithoutTx = new AuthRepositoryAdapter({ dbClient: clientWithoutTx });
+
+      await expect(
+        adapterWithoutTx.rotateRefreshSession({
+          oldSessionId: activeSession.id,
+          newHashedTokenId: 'bb'.repeat(32),
+          newExpiresAt: new Date(Date.now() + 86400000),
+          userId,
+        })
+      ).rejects.toMatchObject({
+        code: 'TRANSACTION_UNAVAILABLE',
+        message: expect.stringContaining('$transaction'),
+      });
+
+      // Verify zero writes: activeSession is NOT revoked
+      const sessionState = await adapter.findRefreshSessionById(activeSession.id);
+      expect(sessionState.revokedAt).toBeNull();
+    });
+
+    it('returns null when duplicate successor insertion fails with confirmed P2002 on rotatedFrom', async () => {
       // First rotation succeeds and inserts successor with rotatedFrom = activeSession.id
       await adapter.rotateRefreshSession({
         oldSessionId: activeSession.id,
@@ -530,7 +579,43 @@ describe('AuthRepositoryAdapter & Rotation Rules (Stage 5A)', () => {
       expect(secondAttempt).toBeNull();
     });
 
-    it('documents that insertion failure causes a rollback in real PostgreSQL transactions', async () => {
+    it('propagates unrelated unique-constraint errors (e.g. hashedTokenId collision) rather than treating as rotation race', async () => {
+      // Simulate client where successor creation fails with P2002 on hashed_token_id (not rotated_from)
+      const tokenCollisionClient = {
+        refreshSession: {
+          ...mock.client.refreshSession,
+          async create() {
+            const err = new Error('Unique constraint failed on the fields: (`hashed_token_id`)');
+            err.code = 'P2002';
+            err.meta = { target: ['hashed_token_id'] };
+            throw err;
+          },
+        },
+        async $transaction(fn) {
+          return await fn(tokenCollisionClient);
+        },
+      };
+
+      const collisionAdapter = new AuthRepositoryAdapter({ dbClient: tokenCollisionClient });
+
+      // Must throw P2002, NOT return null
+      await expect(
+        collisionAdapter.rotateRefreshSession({
+          oldSessionId: activeSession.id,
+          newHashedTokenId: 'cc'.repeat(32),
+          newExpiresAt: new Date(Date.now() + 86400000),
+          userId,
+        })
+      ).rejects.toMatchObject({
+        code: 'P2002',
+      });
+    });
+
+    it('documents that insertion failure causes a rollback in real PostgreSQL transactions (mocked transactional contract)', async () => {
+      // NOTE ON TESTING METHODOLOGY:
+      // In real PostgreSQL, an error in tx.create (such as a unique constraint violation) triggers a database-level ROLLBACK
+      // within prisma.$transaction, undoing any preceding updateMany write. This mock test verifies that the adapter catches
+      // the error and propagates it to abort the interactive transaction runner; it does not simulate PostgreSQL MVCC or row locks.
       let rollbackSimulated = false;
       const transactionalClient = {
         refreshSession: {
@@ -538,6 +623,7 @@ describe('AuthRepositoryAdapter & Rotation Rules (Stage 5A)', () => {
           async create() {
             const err = new Error('Unique constraint failed on the fields: (`rotated_from`)');
             err.code = 'P2002';
+            err.meta = { target: ['rotated_from'] };
             throw err;
           },
         },
