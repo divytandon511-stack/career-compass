@@ -145,7 +145,9 @@ model Career {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  dimensions CareerDimension[]
+  dimensions   CareerDimension[]
+  careerSkills CareerSkill[]
+  pathways     EducationPathway[]
 
   @@index([published])
   @@map("careers")
@@ -161,6 +163,41 @@ model CareerDimension {
 
   @@unique([careerId, dimension])
   @@map("career_dimensions")
+}
+
+model Skill {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  careerSkills CareerSkill[]
+
+  @@map("skills")
+}
+
+model CareerSkill {
+  careerId String @map("career_id") @db.Uuid
+  skillId  String @map("skill_id") @db.Uuid
+
+  career Career @relation(fields: [careerId], references: [id], onDelete: Cascade)
+  skill  Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([careerId, skillId])
+  @@map("career_skills")
+}
+
+model EducationPathway {
+  id            String    @id @default(uuid()) @db.Uuid
+  careerId      String    @map("career_id") @db.Uuid
+  stage         String    @db.VarChar(50)
+  qualification String    @db.VarChar(200)
+  notes         String?   @db.Text
+  verifiedAt    DateTime? @map("verified_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  career Career @relation(fields: [careerId], references: [id], onDelete: Cascade)
+
+  @@map("education_pathways")
 }
 
 enum Role {
