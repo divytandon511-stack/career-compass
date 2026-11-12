@@ -6,6 +6,7 @@ import { registerSchema, loginSchema } from '../validators/auth.validator.js';
 import {
   generateOpaqueToken,
   hashToken,
+  isValidRefreshToken,
   REFRESH_TOKEN_LIFETIME_MS,
 } from '../utils/token.js';
 
@@ -171,17 +172,27 @@ export class AuthService {
 
     // Fail closed if user was nonexistent, hash was absent, or password check failed
     if (!user || !user.passwordHash || !isValidPassword) {
-      throw new AppError('UNAUTHORIZED', 'Invalid email or password', 401);
+      const err = new AppError('UNAUTHORIZED', 'Invalid email or password', 401);
+      err.internalReason = !user
+        ? 'USER_NOT_FOUND'
+        : !user.passwordHash
+        ? 'MISSING_PASSWORD_HASH'
+        : 'INVALID_CREDENTIALS';
+      throw err;
     }
 
-    // Enforce active account status
+    // Enforce active account status — standardize observable response to prevent account state discovery
     if (user.status !== 'ACTIVE') {
-      throw new AppError('UNAUTHORIZED', 'User account is suspended', 401);
+      const err = new AppError('UNAUTHORIZED', 'Invalid email or password', 401);
+      err.internalReason = 'ACCOUNT_SUSPENDED';
+      throw err;
     }
 
-    // Validate authoritative role belongs to allowlist
+    // Validate authoritative role belongs to allowlist — standardize observable response
     if (!user.role || !ALLOWED_ROLES.includes(user.role)) {
-      throw new AppError('UNAUTHORIZED', 'User account has an invalid or unrecognized role', 401);
+      const err = new AppError('UNAUTHORIZED', 'Invalid email or password', 401);
+      err.internalReason = 'INVALID_ROLE';
+      throw err;
     }
 
     // Issue short-lived JWT access token (900 seconds)
@@ -240,10 +251,7 @@ export class AuthService {
    * @returns {Promise<{ accessToken: string, expiresIn: number, refreshToken: string }>}
    */
   async refresh(rawRefreshToken) {
-    if (
-      typeof rawRefreshToken !== 'string' ||
-      !/^[a-f0-9]{64}$/i.test(rawRefreshToken.trim())
-    ) {
+    if (!isValidRefreshToken(rawRefreshToken)) {
       throw new AppError('UNAUTHORIZED', 'Invalid or malformed refresh token', 401);
     }
 
@@ -358,11 +366,13 @@ export class AuthService {
    * Logs out a session or all active sessions for a user.
    *
    * Trusted Identity Binding Requirements:
-   * - Stage 4 controllers MUST supply `authenticatedUserId` strictly from verified `req.user.id`.
-   * - Never pass an unverified user ID from query strings, route params, or request bodies.
-   * - If allDevices=true, the target user is derived from `authenticatedUserId` or a verified active
-   *   refresh session; it throws 401 if insufficient authentication context is supplied and never
-   *   silently falls back to single-session logout.
+   * - Stage 4 controllers MUST supply `authenticatedUserId` strictly from verified `req.user.id`,
+   *   which is authoritatively populated by the Stage 2 `authenticate` middleware.
+   * - Stage 4 controllers MUST NEVER derive `authenticatedUserId` from request body (`req.body`),
+   *   query parameters (`req.query`), route/URL parameters (`req.params`), or unverified headers.
+   * - If allDevices=true and authenticatedUserId is omitted, the target user is derived strictly
+   *   from a verified active refresh session (both non-revoked and non-expired); it throws 401
+   *   if insufficient authentication context is supplied and never silently falls back to single-session logout.
    * - Cross-user revocation attempts (where `authenticatedUserId !== session.userId`) are rejected
    *   with 403 FORBIDDEN.
    *
@@ -387,10 +397,7 @@ export class AuthService {
     let session = null;
 
     if (refreshToken !== undefined && refreshToken !== null) {
-      if (
-        typeof refreshToken !== 'string' ||
-        !/^[a-f0-9]{64}$/i.test(refreshToken.trim())
-      ) {
+      if (!isValidRefreshToken(refreshToken)) {
         throw new AppError('UNAUTHORIZED', 'Invalid or malformed refresh token', 401);
       }
       hashedTokenId = hashToken(refreshToken);
@@ -406,7 +413,14 @@ export class AuthService {
 
     // All-device logout flow
     if (allDevices) {
-      const targetUserId = authenticatedUserId || (session?.revokedAt === null ? session?.userId : null);
+      // Validate session against both revocation and expiry timestamps
+      const isSessionActive =
+        session !== null &&
+        session !== undefined &&
+        session.revokedAt === null &&
+        new Date(session.expiresAt).getTime() > this.getCurrentTime();
+
+      const targetUserId = authenticatedUserId || (isSessionActive ? session.userId : null);
 
       if (!targetUserId) {
         throw new AppError(

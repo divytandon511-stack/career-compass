@@ -10,8 +10,16 @@ import { hashToken } from '../src/utils/token.js';
 import * as passwordUtils from '../src/utils/password.js';
 
 /**
- * Creates an in-test fake repository adhering to AuthRepositoryInterface.
- * Used exclusively within unit/integration tests to verify business logic.
+ * In-test fake repository adhering to AuthRepositoryInterface.
+ * Used exclusively within unit tests to verify AuthService business logic in isolation.
+ *
+ * CRITICAL TEST LIMITATION DISCLAIMER:
+ * This fake repository is an in-memory simulation for testing service-level flows.
+ * It DOES NOT claim to prove real PostgreSQL ACID transaction guarantees, row-level locks
+ * (SELECT ... FOR UPDATE), multi-process serialization, or database constraint enforcement.
+ * Real concurrency, multi-connection race conditions, and SQL uniqueness constraint tests
+ * MUST be added in integration tests against an authoritative PostgreSQL database when the
+ * Prisma adapter is implemented in Stage 5.
  */
 const createFakeAuthRepository = () => {
   const users = new Map();
@@ -70,6 +78,12 @@ const createFakeAuthRepository = () => {
     },
 
     async createRefreshSession({ userId, hashedTokenId, expiresAt, rotatedFrom = null }) {
+      if (hashedTokenIndex.has(hashedTokenId)) {
+        const error = new Error('Unique constraint failed on the fields: (`hashedTokenId`)');
+        error.code = 'P2002';
+        throw error;
+      }
+
       const id = crypto.randomUUID();
       const session = {
         id,
@@ -102,6 +116,20 @@ const createFakeAuthRepository = () => {
       if (!oldSession || oldSession.revokedAt !== null) {
         // Concurrency collision or already rotated/revoked
         return null;
+      }
+
+      // Predecessor uniqueness invariant: a predecessor may have at most one successful rotation successor
+      for (const s of sessions.values()) {
+        if (s.rotatedFrom === oldSessionId) {
+          return null;
+        }
+      }
+
+      // HashedTokenId uniqueness invariant
+      if (hashedTokenIndex.has(newHashedTokenId)) {
+        const error = new Error('Unique constraint failed on the fields: (`hashedTokenId`)');
+        error.code = 'P2002';
+        throw error;
       }
 
       // Mark old session revoked atomically with reason TOKEN_ROTATION
@@ -149,12 +177,54 @@ const createFakeAuthRepository = () => {
     },
 
     async revokeRefreshSessionFamily(params) {
+      const sessionId = params?.sessionId;
       const targetUserId = typeof params === 'string' ? params : params?.userId;
+
+      if (!sessionId) {
+        let count = 0;
+        for (const session of sessions.values()) {
+          if ((!targetUserId || session.userId === targetUserId) && session.revokedAt === null) {
+            session.revokedAt = new Date();
+            session.revokedReason = 'REUSE_DETECTED';
+            count++;
+          }
+        }
+        return count;
+      }
+
+      // Lineage traversal: find root session by walking rotatedFrom upward
+      let rootId = sessionId;
+      const visitedUp = new Set([rootId]);
+      while (true) {
+        const curr = sessions.get(rootId);
+        if (curr && curr.rotatedFrom && !visitedUp.has(curr.rotatedFrom)) {
+          visitedUp.add(curr.rotatedFrom);
+          rootId = curr.rotatedFrom;
+        } else {
+          break;
+        }
+      }
+
+      // Collect all descendants from root down
+      const familyIds = new Set([rootId]);
+      let expanded = true;
+      while (expanded) {
+        expanded = false;
+        for (const [id, s] of sessions.entries()) {
+          if (s.rotatedFrom && familyIds.has(s.rotatedFrom) && !familyIds.has(id)) {
+            familyIds.add(id);
+            expanded = true;
+          }
+        }
+      }
+
+      // Revoke all unrevoked sessions strictly within this family lineage
       let count = 0;
-      for (const session of sessions.values()) {
-        if ((!targetUserId || session.userId === targetUserId) && session.revokedAt === null) {
-          session.revokedAt = new Date();
-          session.revokedReason = 'REUSE_DETECTED';
+      for (const id of familyIds) {
+        const s = sessions.get(id);
+        if (s && (!targetUserId || s.userId === targetUserId) && s.revokedAt === null) {
+          s.revokedAt = new Date();
+          s.revokedReason = 'REUSE_DETECTED';
           count++;
         }
       }
@@ -453,7 +523,8 @@ describe('CareerCompass Authentication Service (Stage 3)', () => {
       } catch (err) {
         expect(err.statusCode).toBe(401);
         expect(err.code).toBe('UNAUTHORIZED');
-        expect(err.message).toBe('User account is suspended');
+        expect(err.message).toBe('Invalid email or password');
+        expect(err.internalReason).toBe('ACCOUNT_SUSPENDED');
       }
     });
 
@@ -497,9 +568,16 @@ describe('CareerCompass Authentication Service (Stage 3)', () => {
       });
     });
 
-    it('rejects invalid or malformed refresh token formats (non-64 hex chars) before database query', async () => {
+    it('rejects invalid or malformed refresh token formats (non-canonical hex) before database query', async () => {
       // Non-hex characters
       await expect(authService.refresh('zzzz'.repeat(16))).rejects.toThrow(AppError);
+      // Uppercase hex characters (non-canonical)
+      await expect(authService.refresh('A'.repeat(64))).rejects.toThrow(AppError);
+      // Mixed-case hex characters (non-canonical)
+      await expect(authService.refresh('aAbB'.repeat(16))).rejects.toThrow(AppError);
+      // Leading or trailing whitespace
+      await expect(authService.refresh(' ' + 'a'.repeat(64))).rejects.toThrow(AppError);
+      await expect(authService.refresh('a'.repeat(64) + ' ')).rejects.toThrow(AppError);
       // Too short
       await expect(authService.refresh('a'.repeat(32))).rejects.toThrow(AppError);
       // Too long
@@ -1088,6 +1166,314 @@ describe('CareerCompass Authentication Service (Stage 3)', () => {
       expect(rejected[0].reason).toBeInstanceOf(AppError);
       expect(rejected[0].reason.statusCode).toBe(401);
       expect(rejected[0].reason.refreshToken).toBeUndefined();
+    });
+  });
+
+  describe('Integration Hardening & Invariant Verification', () => {
+    let student;
+    let loginData;
+
+    beforeEach(async () => {
+      const reg = await authService.register({
+        email: 'hardening.student@example.test',
+        password: 'Password123!@#',
+        displayName: 'Hardening Student',
+        schoolGrade: '10',
+        consentAccepted: true,
+      });
+      student = reg.user;
+
+      loginData = await authService.login({
+        email: 'hardening.student@example.test',
+        password: 'Password123!@#',
+      });
+    });
+
+    describe('1. All-device logout session validation (revocation and expiry)', () => {
+      it('rejects expired refresh session from authenticating caller for all-device logout', async () => {
+        // Fast-forward past session expiry (7 days + 1 hour)
+        mockCurrentTime += 7 * 24 * 60 * 60 * 1000 + 3600000;
+
+        let caughtError;
+        try {
+          await authService.logout({
+            refreshToken: loginData.refreshToken,
+            allDevices: true,
+          });
+        } catch (err) {
+          caughtError = err;
+        }
+
+        expect(caughtError).toBeInstanceOf(AppError);
+        expect(caughtError.statusCode).toBe(401);
+        expect(caughtError.message).toBe(
+          'Authentication context or verified active refresh session is required for all-device logout'
+        );
+
+        // Verify session was NOT revoked via all-device logout
+        const session = await fakeRepo.findRefreshSessionByHashedToken(hashToken(loginData.refreshToken));
+        expect(session.revokedAt).toBeNull();
+      });
+
+      it('rejects already-revoked refresh session from authenticating caller for all-device logout', async () => {
+        // Revoke the session first
+        await authService.logout({ refreshToken: loginData.refreshToken });
+
+        let caughtError;
+        try {
+          await authService.logout({
+            refreshToken: loginData.refreshToken,
+            allDevices: true,
+          });
+        } catch (err) {
+          caughtError = err;
+        }
+
+        expect(caughtError).toBeInstanceOf(AppError);
+        expect(caughtError.statusCode).toBe(401);
+        expect(caughtError.message).toBe(
+          'Authentication context or verified active refresh session is required for all-device logout'
+        );
+      });
+
+      it('permits active, non-expired refresh session to authenticate caller for all-device logout', async () => {
+        const login2 = await authService.login({
+          email: 'hardening.student@example.test',
+          password: 'Password123!@#',
+        });
+
+        // 1 hour later (well within 7 days)
+        mockCurrentTime += 3600000;
+
+        const res = await authService.logout({
+          refreshToken: loginData.refreshToken,
+          allDevices: true,
+        });
+
+        expect(res).toEqual({ success: true });
+
+        const s1 = await fakeRepo.findRefreshSessionByHashedToken(hashToken(loginData.refreshToken));
+        const s2 = await fakeRepo.findRefreshSessionByHashedToken(hashToken(login2.refreshToken));
+        expect(s1.revokedAt).not.toBeNull();
+        expect(s2.revokedAt).not.toBeNull();
+      });
+    });
+
+    describe('2. Standardized externally observable invalid-login responses', () => {
+      it('returns identical external 401 error envelope across all login failure modes with internal distinctions', async () => {
+        const cases = [
+          {
+            name: 'nonexistent account',
+            input: { email: 'nonexistent.user@example.test', password: 'Password123!@#' },
+            expectedInternalReason: 'USER_NOT_FOUND',
+          },
+          {
+            name: 'incorrect password',
+            input: { email: 'hardening.student@example.test', password: 'WrongPassword999!' },
+            expectedInternalReason: 'INVALID_CREDENTIALS',
+          },
+        ];
+
+        for (const tc of cases) {
+          let err;
+          try {
+            await authService.login(tc.input);
+          } catch (e) {
+            err = e;
+          }
+
+          expect(err, `Failed for case: ${tc.name}`).toBeInstanceOf(AppError);
+          expect(err.statusCode).toBe(401);
+          expect(err.code).toBe('UNAUTHORIZED');
+          expect(err.message).toBe('Invalid email or password');
+          expect(err.internalReason).toBe(tc.expectedInternalReason);
+        }
+
+        // Suspended account case
+        const user = await fakeRepo.findUserById(student.id);
+        user.status = 'SUSPENDED';
+
+        let suspendedErr;
+        try {
+          await authService.login({
+            email: 'hardening.student@example.test',
+            password: 'Password123!@#',
+          });
+        } catch (e) {
+          suspendedErr = e;
+        }
+
+        expect(suspendedErr).toBeInstanceOf(AppError);
+        expect(suspendedErr.statusCode).toBe(401);
+        expect(suspendedErr.code).toBe('UNAUTHORIZED');
+        expect(suspendedErr.message).toBe('Invalid email or password');
+        expect(suspendedErr.internalReason).toBe('ACCOUNT_SUSPENDED');
+
+        // Invalid role account case
+        user.status = 'ACTIVE';
+        user.role = 'SUPERUSER'; // Invalid non-allowlisted role
+
+        let roleErr;
+        try {
+          await authService.login({
+            email: 'hardening.student@example.test',
+            password: 'Password123!@#',
+          });
+        } catch (e) {
+          roleErr = e;
+        }
+
+        expect(roleErr).toBeInstanceOf(AppError);
+        expect(roleErr.statusCode).toBe(401);
+        expect(roleErr.code).toBe('UNAUTHORIZED');
+        expect(roleErr.message).toBe('Invalid email or password');
+        expect(roleErr.internalReason).toBe('INVALID_ROLE');
+      });
+    });
+
+    describe('3. Canonical 64-character lowercase hex refresh token enforcement', () => {
+      it('strictly rejects non-canonical refresh tokens in refresh()', async () => {
+        const nonCanonical = [
+          'A'.repeat(64), // Uppercase hex
+          'aAbB'.repeat(16), // Mixed-case hex
+          ' ' + 'a'.repeat(64), // Leading whitespace
+          'a'.repeat(64) + ' ', // Trailing whitespace
+          '\t' + 'a'.repeat(64), // Tab character
+          '\n' + 'a'.repeat(64), // Newline character
+          'a'.repeat(63), // 63 chars
+          'a'.repeat(65), // 65 chars
+          '0123456789abcdef'.repeat(3) + 'g'.repeat(16), // Invalid non-hex 'g'
+        ];
+
+        for (const token of nonCanonical) {
+          let err;
+          try {
+            await authService.refresh(token);
+          } catch (e) {
+            err = e;
+          }
+
+          expect(err, `Failed to reject token: ${token}`).toBeInstanceOf(AppError);
+          expect(err.statusCode).toBe(401);
+          expect(err.message).toBe('Invalid or malformed refresh token');
+        }
+      });
+
+      it('strictly rejects non-canonical refresh tokens in logout()', async () => {
+        const nonCanonical = [
+          'A'.repeat(64),
+          ' ' + 'a'.repeat(64),
+          'a'.repeat(64) + ' ',
+          'g'.repeat(64),
+          'a'.repeat(32),
+        ];
+
+        for (const token of nonCanonical) {
+          let err;
+          try {
+            await authService.logout({ refreshToken: token });
+          } catch (e) {
+            err = e;
+          }
+
+          expect(err, `Failed to reject token in logout: ${token}`).toBeInstanceOf(AppError);
+          expect(err.statusCode).toBe(401);
+          expect(err.message).toBe('Invalid or malformed refresh token');
+        }
+      });
+    });
+
+    describe('4. Repository contract uniqueness and family isolation invariants', () => {
+      it('enforces hashedTokenId uniqueness invariant on session insertion and rotation', async () => {
+        const hashedId = hashToken('a'.repeat(64));
+
+        await fakeRepo.createRefreshSession({
+          userId: student.id,
+          hashedTokenId: hashedId,
+          expiresAt: new Date(mockCurrentTime + 10000),
+        });
+
+        // Attempt duplicate insertion
+        await expect(
+          fakeRepo.createRefreshSession({
+            userId: student.id,
+            hashedTokenId: hashedId,
+            expiresAt: new Date(mockCurrentTime + 10000),
+          })
+        ).rejects.toThrow(/Unique constraint failed/);
+      });
+
+      it('enforces that a predecessor session may have at most one successful rotation successor', async () => {
+        const token = loginData.refreshToken;
+        const initialSession = await fakeRepo.findRefreshSessionByHashedToken(hashToken(token));
+
+        // First rotation succeeds
+        const newSession1 = await fakeRepo.rotateRefreshSession({
+          oldSessionId: initialSession.id,
+          newHashedTokenId: hashToken('b'.repeat(64)),
+          newExpiresAt: new Date(mockCurrentTime + 10000),
+          userId: student.id,
+        });
+        expect(newSession1).not.toBeNull();
+        expect(newSession1.rotatedFrom).toBe(initialSession.id);
+
+        // Attempting a second rotation on the same predecessor session must fail (return null)
+        const newSession2 = await fakeRepo.rotateRefreshSession({
+          oldSessionId: initialSession.id,
+          newHashedTokenId: hashToken('c'.repeat(64)),
+          newExpiresAt: new Date(mockCurrentTime + 10000),
+          userId: student.id,
+        });
+        expect(newSession2).toBeNull();
+      });
+
+      it('family revocation preserves lineage and isolates unrelated sessions for the same user', async () => {
+        // Session A lineage (Laptop): Login -> Rotate A1 -> Rotate A2
+        const loginA = await authService.login({
+          email: 'hardening.student@example.test',
+          password: 'Password123!@#',
+        });
+        const rotA1 = await authService.refresh(loginA.refreshToken);
+        const rotA2 = await authService.refresh(rotA1.refreshToken);
+
+        // Session B lineage (Mobile): Login -> Rotate B1
+        const loginB = await authService.login({
+          email: 'hardening.student@example.test',
+          password: 'Password123!@#',
+        });
+        const rotB1 = await authService.refresh(loginB.refreshToken);
+
+        // Advance past grace period (10s)
+        mockCurrentTime += 10000;
+
+        // Replay Session A1 (outside grace window -> token reuse detected)
+        let caughtReuseErr;
+        try {
+          await authService.refresh(rotA1.refreshToken);
+        } catch (e) {
+          caughtReuseErr = e;
+        }
+
+        expect(caughtReuseErr).toBeInstanceOf(AppError);
+        expect(caughtReuseErr.statusCode).toBe(401);
+        expect(caughtReuseErr.message).toBe('Invalid refresh token session: token reuse detected');
+
+        // Verify that all sessions in Family A are revoked
+        const sessionA2 = await fakeRepo.findRefreshSessionByHashedToken(hashToken(rotA2.refreshToken));
+        expect(sessionA2.revokedAt).not.toBeNull();
+        expect(sessionA2.revokedReason).toBe('REUSE_DETECTED');
+
+        // CRUCIAL ISOLATION VERIFICATION:
+        // Session B (Mobile) is in an independent lineage family and must remain ACTIVE!
+        const sessionB1 = await fakeRepo.findRefreshSessionByHashedToken(hashToken(rotB1.refreshToken));
+        expect(sessionB1.revokedAt).toBeNull();
+
+        // Mobile session B1 can continue to be refreshed successfully!
+        const rotB2 = await authService.refresh(rotB1.refreshToken);
+        expect(rotB2).toHaveProperty('accessToken');
+        expect(rotB2).toHaveProperty('refreshToken');
+        expect(rotB2.refreshToken).toHaveLength(64);
+      });
     });
   });
 });

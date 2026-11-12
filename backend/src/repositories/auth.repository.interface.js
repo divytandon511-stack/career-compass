@@ -22,30 +22,55 @@
  *    - Query the old session with row-level lock (`SELECT ... FOR UPDATE` or conditional update).
  *    - Verify `oldSession.revokedAt === null`.
  *    - If already revoked (race condition or token reuse), ABORT and return null or throw.
- *    - Atomically update `oldSession.revokedAt = now()`.
+ *    - Atomically update `oldSession.revokedAt = now(), oldSession.revokedReason = 'TOKEN_ROTATION'`.
  *    - Insert new `RefreshSession` with `rotatedFrom = oldSession.id`.
+ *    - The UNIQUE constraint on `rotated_from` guarantees that a predecessor session has at
+ *      most one successful rotation successor, preventing rotation chain forks.
  *    - Guarantees exactly one concurrent rotation succeeds; racing attempts fail.
  *
- * 3. Safe Lineage-Aware Family Revocation (Reuse Detection Defense):
- *    When reuse of an already-rotated token is detected, all sessions in the lineage
+ * 3. Safe Lineage-Aware Family Revocation & Lineage Retention Requirements:
+ *    When reuse of an already-rotated token is detected, all sessions in that specific lineage
  *    family must be revoked atomically. Because docs/data-model.md defines `rotated_from`
  *    without a dedicated `family_id` column, the PostgreSQL implementation must use:
- *    a) A recursive Common Table Expression (CTE) walking `rotated_from` to identify the
- *       root session and all descendants, atomically setting `revoked_at = NOW()`.
- *    b) As an immediate containment fallback, atomically revoke all active sessions for
- *       the user: `UPDATE refresh_sessions SET revoked_at = NOW() WHERE user_id = :userId AND revoked_at IS NULL`.
+ *    - A recursive Common Table Expression (CTE) traversing `rotated_from` upward to find the root
+ *      session and downward to collect all descendant sessions, atomically setting `revoked_at = NOW()`
+ *      and `revoked_reason = 'TOKEN_REUSE_DETECTED'`.
+ *    - All ancestor and descendant traversal in the CTE must be strictly scoped to `user_id = :userId`
+ *      to ensure zero cross-tenant contamination.
+ *    - Lineage isolation: Unrelated active sessions for the same user (e.g. from other devices/logins)
+ *      must remain intact and unaffected.
+ *
+ *    SECURITY RETENTION & SAFE CLEANUP REQUIREMENTS:
+ *    -------------------------------------------------------------------------
+ *    a) Lineage Preservation:
+ *       To guarantee that token reuse detection can traverse the full lineage history, all rotation
+ *       ancestors and descendants must be retained in `refresh_sessions` through the security retention
+ *       period (minimum 30 days after expiration or revocation).
+ *    b) Risks of ON DELETE SET NULL:
+ *       If an intermediate session in a rotation chain is deleted, a foreign key with `ON DELETE SET NULL`
+ *       will overwrite `rotated_from = NULL` on its successor. This permanently severs the lineage chain
+ *       and orphans subsequent sessions. If an attacker later replays an earlier token, the severed link
+ *       blinds reuse detection, preventing revocation of the compromised descendant!
+ *    c) Safe Cleanup Protocol:
+ *       Scheduled cleanup routines must never prune individual intermediate sessions while active or
+ *       recent descendants exist. Purging must be executed atomically on entire session lineages: a
+ *       family may be deleted only when the latest descendant in the chain has been expired or revoked
+ *       for longer than the security retention period (e.g. `expires_at < NOW() - INTERVAL '30 days'`).
+ *       Using `ON DELETE RESTRICT` on `rotated_from` is strongly recommended to structurally prevent
+ *       accidental orphan creation.
  *
  * 4. Token Privacy Invariant:
  *    Plaintext refresh tokens must NEVER be passed to or stored by the repository.
  *    Only deterministic SHA-256 digests (`hashedTokenId`) are persisted, matching
- *    the `hashed_token_id VARCHAR(255)` column with `INDEX(hashed_token_id)`.
+ *    the `hashed_token_id VARCHAR(255)` column with `UNIQUE(hashed_token_id)`.
  *
  * 5. Database Constraints Required for Security:
  *    - `users.email`: UNIQUE constraint (case-insensitive or normalized lowercase)
  *    - `refresh_sessions.id`: UUID PRIMARY KEY
  *    - `refresh_sessions.user_id`: FOREIGN KEY REFERENCES users(id) ON DELETE CASCADE
- *    - `refresh_sessions.hashed_token_id`: UNIQUE or INDEXED VARCHAR(255)
- *    - `refresh_sessions.rotated_from`: FOREIGN KEY REFERENCES refresh_sessions(id) ON DELETE SET NULL
+ *    - `refresh_sessions.hashed_token_id`: UNIQUE VARCHAR(255)
+ *    - `refresh_sessions.rotated_from`: UNIQUE FOREIGN KEY REFERENCES refresh_sessions(id) ON DELETE RESTRICT (or SET NULL with whole-lineage purge)
+ *    - `refresh_sessions.revoked_reason`: VARCHAR(50) NULL
  * ============================================================================
  */
 
@@ -200,8 +225,41 @@ export class AuthRepositoryInterface {
    *
    * Implementation strategy:
    * In PostgreSQL/Prisma, this must traverse the `rotatedFrom` chain using a recursive CTE,
-   * setting `revoked_at = NOW()` and `revoked_reason = 'REUSE_DETECTED'` on all descendants,
-   * or atomically revoke all active sessions for the user if the lineage cannot be disambiguated.
+   * setting `revoked_at = NOW()` and `revoked_reason = 'TOKEN_REUSE_DETECTED'` on all descendants.
+   * Both ancestor and descendant recursive traversals must be strictly scoped to `user_id = :userId`
+   * to guarantee zero cross-tenant session leakage.
+   *
+   * Verified PostgreSQL Recursive Query Contract:
+   * ```sql
+   * WITH RECURSIVE family_lineage AS (
+   *   SELECT id, rotated_from, user_id
+   *   FROM refresh_sessions
+   *   WHERE id = :sessionId AND user_id = :userId
+   *   UNION
+   *   SELECT parent.id, parent.rotated_from, parent.user_id
+   *   FROM refresh_sessions parent
+   *   JOIN family_lineage fl ON fl.rotated_from = parent.id
+   *   WHERE parent.user_id = :userId
+   * ),
+   * root_session AS (
+   *   SELECT id FROM family_lineage WHERE rotated_from IS NULL
+   * ),
+   * all_descendants AS (
+   *   SELECT id, user_id
+   *   FROM refresh_sessions
+   *   WHERE id IN (SELECT id FROM root_session) AND user_id = :userId
+   *   UNION
+   *   SELECT child.id, child.user_id
+   *   FROM refresh_sessions child
+   *   JOIN all_descendants ad ON child.rotated_from = ad.id
+   *   WHERE child.user_id = :userId
+   * )
+   * UPDATE refresh_sessions
+   * SET revoked_at = NOW(), revoked_reason = 'TOKEN_REUSE_DETECTED'
+   * WHERE id IN (SELECT id FROM all_descendants)
+   *   AND user_id = :userId
+   *   AND revoked_at IS NULL;
+   * ```
    *
    * @param {object} params
    * @param {string} params.sessionId - Session UUID where reuse was detected

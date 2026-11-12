@@ -23,6 +23,22 @@ export const generateOpaqueToken = (byteLength = 32) => {
 };
 
 /**
+ * Canonical refresh token representation: exactly 64 lowercase hexadecimal characters (256 bits).
+ * Alternate representations (uppercase hex, mixed case, whitespace padding) are strictly invalid.
+ */
+export const CANONICAL_REFRESH_TOKEN_REGEX = /^[0-9a-f]{64}$/;
+
+/**
+ * Validates whether a candidate token strictly conforms to the canonical 64-character lowercase hex format.
+ *
+ * @param {unknown} token - Token candidate
+ * @returns {boolean} True if canonical, false otherwise
+ */
+export const isValidRefreshToken = (token) => {
+  return typeof token === 'string' && CANONICAL_REFRESH_TOKEN_REGEX.test(token);
+};
+
+/**
  * Computes a deterministic SHA-256 cryptographic digest of a raw token string.
  * Plaintext refresh tokens are NEVER stored in the database.
  * Only the SHA-256 hash is persisted, matching the hashed_token_id column.
@@ -31,10 +47,10 @@ export const generateOpaqueToken = (byteLength = 32) => {
  * @returns {string} 64-character lowercase hex SHA-256 digest
  */
 export const hashToken = (token) => {
-  if (typeof token !== 'string' || token.trim().length === 0) {
+  if (typeof token !== 'string' || token.length === 0) {
     throw new TypeError('Token must be a non-empty string');
   }
 
-  return crypto.createHash('sha256').update(token.trim()).digest('hex');
+  return crypto.createHash('sha256').update(token).digest('hex');
 };
 
