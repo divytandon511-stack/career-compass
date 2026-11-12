@@ -6,3 +6,83 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model User {
+  id                String             @id @default(uuid()) @db.Uuid
+  email             String             @unique @db.VarChar(255)
+  passwordHash      String             @map("password_hash") @db.VarChar(255)
+  displayName       String             @map("display_name") @db.VarChar(100)
+  role              Role               @default(STUDENT)
+  status            UserStatus         @default(ACTIVE)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+  studentProfile    StudentProfile?
+  counsellorProfile CounsellorProfile?
+  refreshSessions   RefreshSession[]
+
+  @@map("users")
+}
+
+model StudentProfile {
+  userId          String   @id @map("user_id") @db.Uuid
+  schoolGrade     String?  @map("school_grade") @db.VarChar(10)
+  consentAccepted Boolean  @default(false) @map("consent_accepted")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("student_profiles")
+}
+
+model CounsellorProfile {
+  userId      String   @id @map("user_id") @db.Uuid
+  displayName String   @map("display_name") @db.VarChar(100)
+  bio         String?  @db.Text
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("counsellor_profiles")
+}
+
+model RefreshSession {
+  id            String         @id @default(uuid()) @db.Uuid
+  userId        String         @map("user_id") @db.Uuid
+  hashedTokenId String         @unique @map("hashed_token_id") @db.VarChar(255)
+  expiresAt     DateTime       @map("expires_at") @db.Timestamptz
+  revokedAt     DateTime?      @map("revoked_at") @db.Timestamptz
+  revokedReason RevokedReason? @map("revoked_reason")
+  rotatedFrom   String?        @unique @map("rotated_from") @db.Uuid
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  predecessor RefreshSession? @relation("TokenRotation", fields: [rotatedFrom], references: [id], onDelete: Restrict)
+  successor   RefreshSession? @relation("TokenRotation")
+
+  @@index([userId])
+  @@map("refresh_sessions")
+}
+
+enum Role {
+  STUDENT
+  COUNSELLOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum RevokedReason {
+  TOKEN_ROTATION
+  ROTATED
+  LOGOUT
+  ALL_DEVICES_LOGOUT
+  TOKEN_REUSE_DETECTED
+  REUSE_DETECTED
+  ACCOUNT_SUSPENDED
+  SECURITY_RESET
+  EXPIRED
+}
