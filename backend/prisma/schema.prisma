@@ -29,7 +29,8 @@ model StudentProfile {
   consentAccepted Boolean  @default(false) @map("consent_accepted")
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assessmentAttempts AssessmentAttempt[]
 
   @@map("student_profiles")
 }
@@ -64,6 +65,104 @@ model RefreshSession {
   @@map("refresh_sessions")
 }
 
+model Assessment {
+  id          String           @id @default(uuid()) @db.Uuid
+  title       String           @db.VarChar(200)
+  description String?          @db.Text
+  version     Int              @default(1)
+  status      AssessmentStatus @default(DRAFT)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  questions Question[]
+  attempts  AssessmentAttempt[]
+
+  @@index([status])
+  @@map("assessments")
+}
+
+model Question {
+  id           String    @id @default(uuid()) @db.Uuid
+  assessmentId String    @map("assessment_id") @db.Uuid
+  dimension    Dimension
+  prompt       String    @db.Text
+  position     Int
+  weight       Decimal   @default(1.0) @db.Decimal(5, 4)
+  options      Json      @db.JsonB
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  answers    Answer[]
+
+  @@unique([assessmentId, position])
+  @@map("questions")
+}
+
+model AssessmentAttempt {
+  id                String        @id @default(uuid()) @db.Uuid
+  studentId         String        @map("student_id") @db.Uuid
+  assessmentId      String        @map("assessment_id") @db.Uuid
+  assessmentVersion Int           @map("assessment_version")
+  status            AttemptStatus @default(IN_PROGRESS)
+  scoresJson        Json?         @map("scores_json") @db.JsonB
+  algorithmVersion  String?       @map("algorithm_version") @db.VarChar(50)
+  startedAt         DateTime      @default(now()) @map("started_at") @db.Timestamptz
+  completedAt       DateTime?     @map("completed_at") @db.Timestamptz
+
+  student    StudentProfile @relation(fields: [studentId], references: [userId], onDelete: Cascade)
+  assessment Assessment     @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  answers    Answer[]
+
+  @@index([studentId])
+  @@index([assessmentId])
+  @@index([status])
+  @@map("assessment_attempts")
+}
+
+model Answer {
+  id               String   @id @default(uuid()) @db.Uuid
+  attemptId        String   @map("attempt_id") @db.Uuid
+  questionId       String   @map("question_id") @db.Uuid
+  selectedOptionId String   @map("selected_option_id") @db.VarChar(36)
+  score            Int
+  answeredAt       DateTime @default(now()) @map("answered_at") @db.Timestamptz
+
+  attempt  AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question Question          @relation(fields: [questionId], references: [id], onDelete: Restrict)
+
+  @@unique([attemptId, questionId])
+  @@map("answers")
+}
+
+model Career {
+  id             String   @id @default(uuid()) @db.Uuid
+  slug           String   @unique @db.VarChar(120)
+  title          String   @db.VarChar(120)
+  description    String?  @db.Text
+  published      Boolean  @default(false)
+  profileVersion Int      @default(1) @map("profile_version")
+  sourceNote     String?  @map("source_note") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  dimensions CareerDimension[]
+
+  @@index([published])
+  @@map("careers")
+}
+
+model CareerDimension {
+  id           String    @id @default(uuid()) @db.Uuid
+  careerId     String    @map("career_id") @db.Uuid
+  dimension    Dimension
+  targetWeight Decimal   @map("target_weight") @db.Decimal(5, 4)
+
+  career Career @relation(fields: [careerId], references: [id], onDelete: Cascade)
+
+  @@unique([careerId, dimension])
+  @@map("career_dimensions")
+}
+
 enum Role {
   STUDENT
   COUNSELLOR
@@ -85,4 +184,25 @@ enum RevokedReason {
   ACCOUNT_SUSPENDED
   SECURITY_RESET
   EXPIRED
+}
+
+enum AssessmentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum Dimension {
+  ANALYTICAL
+  CREATIVE
+  SOCIAL
+  PRACTICAL
+  ORGANIZATIONAL
+  INVESTIGATIVE
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
 }
