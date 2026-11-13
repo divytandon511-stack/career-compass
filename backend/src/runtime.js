@@ -40,6 +40,7 @@ export const createRuntimeDependencies = ({ dbClient = new PrismaClient() } = {}
     assessmentRepository: new AssessmentRepositoryAdapter({ dbClient }),
     careerRepository: new CareerRepositoryAdapter({ dbClient }),
     platformRepository: new PlatformRepository({ dbClient }),
+    guidanceRepository,
     guidanceService,
     readinessCheck: () => dbClient.$queryRaw`SELECT 1`,
   };

@@ -37,6 +37,7 @@ export class GuidanceRepository {
     this.dbName = dbName;
     this.mongoose = mongooseInstance;
     this.model = model;
+    this.injectedModel = Boolean(model);
     this.retentionDays = retentionDays;
     this.connectionPromise = null;
   }
@@ -58,6 +59,15 @@ export class GuidanceRepository {
       });
     }
     return this.connectionPromise;
+  }
+
+  async close() {
+    if (!this.uri || this.injectedModel) return;
+    if (this.connectionPromise) await this.connectionPromise;
+    if (this.mongoose.connection.readyState !== 0) {
+      await this.mongoose.disconnect();
+    }
+    this.connectionPromise = null;
   }
 
   async purgeExpired(model) {

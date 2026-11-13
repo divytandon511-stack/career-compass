@@ -114,6 +114,7 @@ export const shutdown = (signal = 'SIGTERM') => {
 
       try {
         if (runtime?.dbClient) await runtime.dbClient.$disconnect();
+        if (runtime?.guidanceRepository) await runtime.guidanceRepository.close();
       } catch (disconnectError) {
         return reject(disconnectError);
       }
