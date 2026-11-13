@@ -6,6 +6,8 @@ import rateLimit from 'express-rate-limit';
 import { env } from './config/env.js';
 import { createApiRouter } from './routes/index.js';
 import { createAuthRouter } from './routes/auth.routes.js';
+import { createAssessmentRouter } from './routes/assessment.routes.js';
+import { AssessmentService } from './services/assessment.service.js';
 import { healthRoutes } from './routes/health.routes.js';
 import { notFoundHandler } from './middleware/not-found.js';
 import { errorHandler } from './middleware/error-handler.js';
@@ -21,6 +23,8 @@ export const createApp = ({
   loginLimiter,
   refreshLimiter,
   csrfProtection,
+  assessmentService,
+  assessmentRepository,
 } = {}) => {
   const app = express();
 
@@ -80,8 +84,19 @@ export const createApp = ({
     });
   }
 
+  let assessmentRouter = null;
+  const resolvedAssessmentService =
+    assessmentService ||
+    (assessmentRepository ? new AssessmentService({ assessmentRepository }) : null);
+  if (resolvedAssessmentService) {
+    assessmentRouter = createAssessmentRouter({
+      assessmentService: resolvedAssessmentService,
+      authenticate,
+    });
+  }
+
   // 7. API Routes mounted under /api/v1
-  const apiRouter = createApiRouter({ authRouter });
+  const apiRouter = createApiRouter({ authRouter, assessmentRouter });
   app.use('/api/v1', apiRouter);
 
   // Root /health alias aligned with docs/api-contract.md §9 and docs/architecture.md §9

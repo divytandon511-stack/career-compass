@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { healthRoutes } from './health.routes.js';
 
-export const createApiRouter = ({ authRouter } = {}) => {
+export const createApiRouter = ({ authRouter, assessmentRouter } = {}) => {
   const router = Router();
 
   // Mount health check under /health
@@ -10,6 +10,10 @@ export const createApiRouter = ({ authRouter } = {}) => {
   // Mount auth routes under /auth when configured
   if (authRouter) {
     router.use('/auth', authRouter);
+  }
+
+  if (assessmentRouter) {
+    router.use(assessmentRouter);
   }
 
   return router;
