@@ -3,8 +3,12 @@ import url from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { app } from './app.js';
+import { createApp } from './app.js';
 import { env } from './config/env.js';
+import { createRuntimeDependencies } from './runtime.js';
+
+const runtime = process.env.DATABASE_URL ? createRuntimeDependencies() : null;
+const app = createApp(runtime || {});
 
 let server = null;
 let shutdownPromise = null;
@@ -97,7 +101,7 @@ export const shutdown = (signal = 'SIGTERM') => {
   const currentServer = server;
 
   shutdownPromise = new Promise((resolve, reject) => {
-    currentServer.close((err) => {
+    currentServer.close(async (err) => {
       server = null;
       shutdownPromise = null;
 
@@ -106,6 +110,12 @@ export const shutdown = (signal = 'SIGTERM') => {
           console.error('[Server] Error while closing HTTP server:', err);
         }
         return reject(err);
+      }
+
+      try {
+        if (runtime?.dbClient) await runtime.dbClient.$disconnect();
+      } catch (disconnectError) {
+        return reject(disconnectError);
       }
 
       if (process.env.NODE_ENV !== 'test') {
