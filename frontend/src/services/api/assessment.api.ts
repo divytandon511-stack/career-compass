@@ -1,5 +1,10 @@
 import { apiClient } from './client';
 import { AssessmentAttempt, Recommendation } from '@/types/models';
+import { PaginationParams } from '@/types/api';
+
+export interface ListAttemptsParams extends PaginationParams {
+  status?: 'IN_PROGRESS' | 'COMPLETED' | 'ABANDONED';
+}
 
 export const assessmentApi = {
   async listAssessments() {
@@ -30,6 +35,18 @@ export const assessmentApi = {
       `/attempts/${attemptId}/submit`,
       { method: 'POST' }
     );
+  },
+
+  async listAttempts(params: ListAttemptsParams = {}) {
+    const query = new URLSearchParams();
+    if (params.page) query.set('page', String(params.page));
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.status) query.set('status', params.status);
+    if (params.sort) query.set('sort', params.sort);
+    if (params.order) query.set('order', params.order);
+
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    return apiClient<AssessmentAttempt[]>(`/attempts${qs}`);
   },
 
   async getAttempt(attemptId: string) {

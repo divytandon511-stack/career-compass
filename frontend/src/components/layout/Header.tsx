@@ -9,6 +9,16 @@ export const Header: React.FC = () => {
   const themeCtx = useContext(ThemeContext);
   const navigate = useNavigate();
 
+  const handleLogout = async () => {
+    if (auth) {
+      await auth.logout();
+      navigate('/login', { replace: true });
+    }
+  };
+
+  const displayName = auth?.user?.displayName || auth?.authUser?.displayName || auth?.user?.email || auth?.authUser?.email;
+  const userRole = auth?.user?.role || auth?.authUser?.role;
+
   return (
     <header style={{ width: '100%', position: 'sticky', top: 0, zIndex: 100 }}>
       {/* MoE / Samagra Shiksha Policy Banner Strip */}
@@ -86,11 +96,17 @@ export const Header: React.FC = () => {
           <div className="flex items-center gap-6" style={{ fontSize: '14px', fontWeight: 500 }}>
             <Link to="/careers" style={{ color: 'var(--text-main)' }}>Career Explorer</Link>
             <Link to="/counsellors" style={{ color: 'var(--text-main)' }}>Counsellors</Link>
-            {auth?.user && (
+            {auth?.isAuthenticated && userRole === 'STUDENT' && (
               <>
                 <Link to="/dashboard" style={{ color: 'var(--text-main)' }}>Dashboard</Link>
                 <Link to="/assessments" style={{ color: 'var(--text-main)' }}>Assessments</Link>
               </>
+            )}
+            {auth?.isAuthenticated && userRole === 'COUNSELLOR' && (
+              <Link to="/counsellor/dashboard" style={{ color: 'var(--text-main)' }}>Workspace</Link>
+            )}
+            {auth?.isAuthenticated && userRole === 'ADMIN' && (
+              <Link to="/admin/dashboard" style={{ color: 'var(--text-main)' }}>Admin Hub</Link>
             )}
           </div>
 
@@ -113,12 +129,12 @@ export const Header: React.FC = () => {
               </button>
             )}
 
-            {auth?.user ? (
+            {auth?.isAuthenticated ? (
               <div className="flex items-center gap-3">
                 <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                  {auth.user.displayName || auth.user.email}
+                  {displayName}
                 </span>
-                <Button variant="secondary" size="sm" onClick={() => auth.logout()}>
+                <Button variant="secondary" size="sm" onClick={handleLogout}>
                   Log Out
                 </Button>
               </div>

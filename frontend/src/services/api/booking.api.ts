@@ -1,9 +1,19 @@
 import { apiClient } from './client';
 import { CounsellorProfile, AvailabilitySlot, Booking } from '@/types/models';
+import { PaginationParams } from '@/types/api';
+
+export interface ListBookingsParams extends PaginationParams {
+  status?: 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
+}
 
 export const bookingApi = {
-  async listCounsellors() {
-    return apiClient<CounsellorProfile[]>('/counsellors');
+  async listCounsellors(params: PaginationParams & { q?: string } = {}) {
+    const query = new URLSearchParams();
+    if (params.page) query.set('page', String(params.page));
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.q) query.set('q', params.q);
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    return apiClient<CounsellorProfile[]>(`/counsellors${qs}`);
   },
 
   async getCounsellor(id: string) {
@@ -25,8 +35,15 @@ export const bookingApi = {
     });
   },
 
-  async getMyBookings() {
-    return apiClient<Booking[]>('/bookings');
+  async getMyBookings(params: ListBookingsParams = {}) {
+    const query = new URLSearchParams();
+    if (params.page) query.set('page', String(params.page));
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.status) query.set('status', params.status);
+    if (params.sort) query.set('sort', params.sort);
+    if (params.order) query.set('order', params.order);
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    return apiClient<Booking[]>(`/bookings${qs}`);
   },
 
   async updateBookingStatus(id: string, status: 'CONFIRMED' | 'COMPLETED' | 'CANCELLED') {

@@ -1,12 +1,16 @@
 import { apiClient } from './client';
-import { Career } from '@/types/models';
+import { Career, SavedCareer } from '@/types/models';
+import { PaginationParams } from '@/types/api';
 
 export const careersApi = {
-  async listCareers(params: { page?: number; limit?: number; q?: string } = {}) {
+  async listCareers(params: PaginationParams & { q?: string; skillId?: string } = {}) {
     const query = new URLSearchParams();
     if (params.page) query.set('page', String(params.page));
     if (params.limit) query.set('limit', String(params.limit));
     if (params.q) query.set('q', params.q);
+    if (params.skillId) query.set('skillId', params.skillId);
+    if (params.sort) query.set('sort', params.sort);
+    if (params.order) query.set('order', params.order);
 
     const queryString = query.toString() ? `?${query.toString()}` : '';
     return apiClient<Career[]>(`/careers${queryString}`, { requiresAuth: false });
@@ -16,8 +20,15 @@ export const careersApi = {
     return apiClient<Career>(`/careers/${idOrSlug}`, { requiresAuth: false });
   },
 
-  async getSavedCareers() {
-    return apiClient<Career[]>('/users/me/saved-careers');
+  async getSavedCareers(params: PaginationParams = {}) {
+    const query = new URLSearchParams();
+    if (params.page) query.set('page', String(params.page));
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+    if (params.order) query.set('order', params.order);
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    return apiClient<SavedCareer[]>(`/users/me/saved-careers${queryString}`);
   },
 
   async saveCareer(careerId: string) {
