@@ -44,26 +44,109 @@ export interface CounsellorProfile {
   active: boolean;
 }
 
+export interface CareerDimension {
+  dimension: Dimension;
+  targetWeight: number;
+}
+
+export interface Skill {
+  id: string;
+  name: string;
+}
+
+export interface EducationPathway {
+  id: string;
+  careerId?: string;
+  stage: string;
+  qualification: string;
+  notes?: string | null;
+  verifiedAt?: string | null;
+  createdAt?: string;
+}
+
 export interface Career {
   id: string;
   slug: string;
   title: string;
-  description: string;
-  published: boolean;
-  profileVersion: number | string;
-  dimensions?: {
-    dimension: Dimension;
-    targetWeight: number;
-  }[];
-  skills?: Array<{ id: string; name: string }>;
-  pathways?: Array<{ id: string; stage: string; qualification: string; notes?: string }>;
+  description?: string | null;
+  summary?: string | null;
+  published?: boolean;
+  profileVersion?: number | string;
+  sourceNote?: string | null;
+  dimensions?: CareerDimension[];
+  skills?: Skill[];
+  pathways?: EducationPathway[];
   savedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
-export interface SavedCareer extends Career {
+export interface SavedCareer {
+  id: string;
+  slug: string;
+  title: string;
+  summary?: string | null;
+  description?: string | null;
   savedAt: string;
+}
+
+export interface Assessment {
+  id: string;
+  title: string;
+  description?: string | null;
+  version: number;
+  status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface QuestionOption {
+  id: string;
+  label: string;
+  value?: number;
+}
+
+export interface AssessmentQuestion {
+  id: string;
+  assessmentId: string;
+  dimension: Dimension;
+  prompt: string;
+  position: number;
+  options: QuestionOption[];
+  weight?: number;
+}
+
+export interface AssessmentQuestionsResponse {
+  assessmentId: string;
+  version: number;
+  questions: AssessmentQuestion[];
+}
+
+export interface StartAttemptResponse {
+  id: string;
+  assessmentId: string;
+  assessmentVersion: number;
+  status: 'IN_PROGRESS' | 'COMPLETED' | 'ABANDONED';
+  startedAt: string;
+  isResumed?: boolean;
+}
+
+export interface SaveAnswerResponse {
+  id: string;
+  attemptId: string;
+  questionId: string;
+  selectedOptionId: string;
+  answeredAt: string;
+}
+
+export interface SubmitAttemptResponse {
+  attemptId: string;
+  status: 'COMPLETED';
+  assessmentVersion: number;
+  algorithmVersion: string;
+  dimensionScores: Record<string, number>;
+  completedAt: string;
+  recommendationsUrl: string;
 }
 
 export interface AssessmentAttempt {
@@ -88,7 +171,8 @@ export interface RecommendationCareer {
   id: string;
   slug: string;
   title: string;
-  description?: string;
+  description?: string | null;
+  summary?: string | null;
 }
 
 export interface Recommendation {
