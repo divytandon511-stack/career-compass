@@ -12,6 +12,7 @@ import { CareerService } from './services/career.service.js';
 import { createCareerRouter } from './routes/career.routes.js';
 import { PlatformService } from './services/platform.service.js';
 import { createPlatformRouter } from './routes/platform.routes.js';
+import { createGuidanceRouter } from './routes/guidance.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
 import { createReadyRoutes } from './routes/ready.routes.js';
 import { notFoundHandler } from './middleware/not-found.js';
@@ -35,6 +36,7 @@ export const createApp = ({
   platformService,
   platformRepository,
   readinessCheck,
+  guidanceService,
 } = {}) => {
   const app = express();
 
@@ -116,9 +118,19 @@ export const createApp = ({
     resolvedPlatformService && typeof authenticate === 'function'
       ? createPlatformRouter({ service: resolvedPlatformService, authenticate })
       : null;
+  const guidanceRouter =
+    guidanceService && typeof authenticate === 'function'
+      ? createGuidanceRouter({ service: guidanceService, authenticate })
+      : null;
 
   // 7. API Routes mounted under /api/v1
-  const apiRouter = createApiRouter({ authRouter, assessmentRouter, careerRouter, platformRouter });
+  const apiRouter = createApiRouter({
+    authRouter,
+    assessmentRouter,
+    careerRouter,
+    platformRouter,
+    guidanceRouter,
+  });
   app.use('/api/v1', apiRouter);
 
   // Root /health alias aligned with docs/api-contract.md §9 and docs/architecture.md §9

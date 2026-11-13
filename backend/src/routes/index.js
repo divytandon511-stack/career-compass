@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { healthRoutes } from './health.routes.js';
 
-export const createApiRouter = ({ authRouter, assessmentRouter, careerRouter, platformRouter } = {}) => {
+export const createApiRouter = ({ authRouter, assessmentRouter, careerRouter, platformRouter, guidanceRouter } = {}) => {
   const router = Router();
 
   // Mount health check under /health
@@ -20,6 +20,9 @@ export const createApiRouter = ({ authRouter, assessmentRouter, careerRouter, pl
   }
   if (platformRouter) {
     router.use(platformRouter);
+  }
+  if (guidanceRouter) {
+    router.use(guidanceRouter);
   }
 
   return router;

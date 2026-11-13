@@ -43,10 +43,16 @@ export const errorHandler = (err, req, res, next) => {
       if (process.env.NODE_ENV !== 'test') {
         console.error('[Server Error] Operational 5xx error:', err);
       }
+      const dependencyCode = statusCode === 503 && ['AI_UNAVAILABLE', 'DB_UNAVAILABLE', 'SERVICE_UNAVAILABLE'].includes(err.code)
+        ? err.code
+        : 'INTERNAL_SERVER_ERROR';
+      const dependencyMessage = dependencyCode === 'INTERNAL_SERVER_ERROR'
+        ? 'Internal server error'
+        : err.message;
       return res.status(statusCode).json({
         error: {
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Internal server error',
+          code: dependencyCode,
+          message: dependencyMessage,
           details: [],
         },
       });
