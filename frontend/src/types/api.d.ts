@@ -14,6 +14,13 @@ export interface PaginationMeta {
   totalPages: number;
 }
 
+export interface PaginationParams {
+  page?: number;
+  limit?: number;
+  sort?: string;
+  order?: 'asc' | 'desc';
+}
+
 export interface ApiErrorDetail {
   field?: string;
   issue: string;
