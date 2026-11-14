@@ -17,8 +17,18 @@ export const AssessmentTakePage: React.FC = () => {
   const [questions, setQuestions] = useState<AssessmentQuestion[]>([]);
   const [attemptId, setAttemptId] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
-  const [answers, setAnswers] = useState<Record<string, string>>({}); // questionId -> optionId
+  const [answers, setAnswers] = useState<Record<string, string>>({}); // Selected option (UI)
+  const [persistedAnswers, setPersistedAnswers] = useState<Record<string, string>>({}); // Confirmed saved to backend
+  const [failedQuestions, setFailedQuestions] = useState<Record<string, string>>({}); // questionId -> error message
+  const [pendingSaves, setPendingSaves] = useState<Set<string>>(new Set()); // Set of questionIds with in-flight/queued saves
+  const [inFlightCount, setInFlightCount] = useState<number>(0); // Total active network requests in flight
   const [isResumed, setIsResumed] = useState<boolean>(false);
+
+  // Queued serialization refs to guarantee sequential server-side write ordering per question
+  const targetOptionRef = React.useRef<Record<string, string>>({});
+  const persistedOptionRef = React.useRef<Record<string, string>>({});
+  const failedOptionRef = React.useRef<Record<string, string>>({});
+  const activeWorkersRef = React.useRef<Record<string, boolean>>({});
 
   // Status flags
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -49,7 +59,24 @@ export const AssessmentTakePage: React.FC = () => {
           setAssessment(assessRes.data);
         }
 
-        const questionList = questionsRes.data?.questions || [];
+        let questionList = questionsRes.data?.questions ? [...questionsRes.data.questions] : [];
+
+        // If the backend returned a paginated response with multiple pages, fetch remaining pages
+        if (questionsRes.meta && questionsRes.meta.totalPages > 1) {
+          const remainingPromises = [];
+          for (let p = 2; p <= questionsRes.meta.totalPages; p++) {
+            remainingPromises.push(
+              assessmentApi.getQuestions(assessmentId!, p, questionsRes.meta.limit)
+            );
+          }
+          const remainingResponses = await Promise.all(remainingPromises);
+          for (const resp of remainingResponses) {
+            if (resp.data?.questions) {
+              questionList = questionList.concat(resp.data.questions);
+            }
+          }
+        }
+
         // Sort questions by position ascending
         questionList.sort((a, b) => a.position - b.position);
         setQuestions(questionList);
@@ -90,6 +117,10 @@ export const AssessmentTakePage: React.FC = () => {
             loadedAnswers[ans.questionId] = ans.selectedOptionId;
           });
           setAnswers(loadedAnswers);
+          setPersistedAnswers(loadedAnswers);
+          targetOptionRef.current = { ...loadedAnswers };
+          persistedOptionRef.current = { ...loadedAnswers };
+          setFailedQuestions({});
 
           // Find first unanswered question to jump to
           const firstUnanswered = questions.findIndex((q) => !loadedAnswers[q.id]);
@@ -111,32 +142,138 @@ export const AssessmentTakePage: React.FC = () => {
     }
   };
 
-  // Save answer to backend
-  const handleSelectOption = useCallback(
-    async (questionId: string, optionId: string) => {
+  // Sequential queue worker per question to strictly guarantee server-side write ordering
+  const processQueueForQuestion = useCallback(
+    async (questionId: string) => {
       if (!attemptId) return;
 
-      // Optimistic update
-      setAnswers((prev) => ({ ...prev, [questionId]: optionId }));
+      if (activeWorkersRef.current[questionId]) {
+        return; // Worker already running for this question; it will process the latest targetOptionRef
+      }
+
+      activeWorkersRef.current[questionId] = true;
+      setPendingSaves((prev) => new Set(prev).add(questionId));
       setSaveStatus('saving');
       setSaveErrorMessage(null);
 
       try {
-        await assessmentApi.saveAnswer(attemptId, questionId, optionId);
-        setSaveStatus('saved');
-      } catch (err: unknown) {
-        setSaveStatus('error');
-        setSaveErrorMessage(
-          err instanceof Error ? err.message : 'Failed to save answer. Click to retry.'
-        );
+        while (true) {
+          const optionToPersist = targetOptionRef.current[questionId];
+          if (!optionToPersist) break;
+
+          // If the server has already confirmed this option, we're done
+          if (persistedOptionRef.current[questionId] === optionToPersist) {
+            break;
+          }
+
+          setInFlightCount((c) => c + 1);
+          try {
+            await assessmentApi.saveAnswer(attemptId, questionId, optionToPersist);
+            // Confirmed persisted by server
+            persistedOptionRef.current[questionId] = optionToPersist;
+            setPersistedAnswers((prev) => ({ ...prev, [questionId]: optionToPersist }));
+            setFailedQuestions((prev) => {
+              if (!prev[questionId]) return prev;
+              const next = { ...prev };
+              delete next[questionId];
+              return next;
+            });
+          } catch (err: unknown) {
+            const message =
+              err instanceof Error ? err.message : 'Failed to save answer. Click to retry.';
+
+            // Only mark as failed if the target hasn't changed while this network request was running
+            if (targetOptionRef.current[questionId] === optionToPersist) {
+              failedOptionRef.current[questionId] = optionToPersist;
+              setFailedQuestions((prev) => ({ ...prev, [questionId]: message }));
+              // CRITICAL: Failed saves cannot silently count as successfully persisted!
+              setPersistedAnswers((prev) => {
+                if (!prev[questionId]) return prev;
+                const next = { ...prev };
+                delete next[questionId];
+                return next;
+              });
+              setSaveStatus('error');
+              setSaveErrorMessage(message);
+              break; // Stop loop on definitive failure for this target
+            }
+          } finally {
+            setInFlightCount((c) => Math.max(0, c - 1));
+          }
+        }
+      } finally {
+        activeWorkersRef.current[questionId] = false;
+
+        const currentTarget = targetOptionRef.current[questionId];
+        const isTargetFailed = failedOptionRef.current[questionId] === currentTarget;
+        const isTargetPersisted = persistedOptionRef.current[questionId] === currentTarget;
+
+        // If targetOption changed to an un-failed, un-persisted option while worker was running, re-trigger
+        if (currentTarget && !isTargetFailed && !isTargetPersisted) {
+          processQueueForQuestion(questionId);
+        } else {
+          setPendingSaves((prev) => {
+            const next = new Set(prev);
+            next.delete(questionId);
+            return next;
+          });
+          if (isTargetPersisted) {
+            setSaveStatus('saved');
+          }
+        }
       }
     },
     [attemptId]
   );
 
+  // Save answer to backend with serialized write guarantees
+  const handleSelectOption = useCallback(
+    async (questionId: string, optionId: string) => {
+      if (!attemptId) return;
+
+      // 1. Optimistically record user's latest selection in UI
+      setAnswers((prev) => ({ ...prev, [questionId]: optionId }));
+
+      // 2. Clear prior failure for this question
+      delete failedOptionRef.current[questionId];
+      setFailedQuestions((prev) => {
+        if (!prev[questionId]) return prev;
+        const next = { ...prev };
+        delete next[questionId];
+        return next;
+      });
+
+      // 3. Set the latest desired option
+      targetOptionRef.current[questionId] = optionId;
+
+      // 4. Trigger the sequential queue worker
+      processQueueForQuestion(questionId);
+    },
+    [attemptId, processQueueForQuestion]
+  );
+
   // Final submission
   const handleSubmitAssessment = async () => {
     if (!attemptId) return;
+
+    if (isSavingAny) {
+      setSubmitError('Please wait for pending answer saves to complete before submitting.');
+      return;
+    }
+
+    if (failedIndices.length > 0) {
+      setSubmitError(
+        `Cannot submit: ${failedIndices.length} question(s) failed to save. Please retry saving.`
+      );
+      return;
+    }
+
+    if (unpersistedIndices.length > 0) {
+      setSubmitError(
+        `All ${totalCount} questions must be answered and saved before submitting.`
+      );
+      return;
+    }
 
     setIsSubmitting(true);
     setSubmitError(null);
@@ -187,12 +324,21 @@ export const AssessmentTakePage: React.FC = () => {
   }, [hasStarted, currentIndex, questions, isSubmitModalOpen, handleSelectOption]);
 
   const currentQuestion = questions[currentIndex];
-  const answeredCount = Object.keys(answers).length;
   const totalCount = questions.length;
-  const progressPercent = totalCount > 0 ? Math.round((answeredCount / totalCount) * 100) : 0;
-  const unansweredIndices = questions
-    .map((q, idx) => (!answers[q.id] ? idx : null))
+
+  // Unpersisted = questions that either have no selection, are currently saving, or failed to save
+  const unpersistedIndices = questions
+    .map((q, idx) => (!persistedAnswers[q.id] ? idx : null))
     .filter((idx): idx is number => idx !== null);
+
+  // Failed saves = questions where save definitively failed
+  const failedIndices = questions
+    .map((q, idx) => (failedQuestions[q.id] ? idx : null))
+    .filter((idx): idx is number => idx !== null);
+
+  const isSavingAny = inFlightCount > 0 || pendingSaves.size > 0;
+  const answeredCount = Object.keys(persistedAnswers).length;
+  const progressPercent = totalCount > 0 ? Math.round((answeredCount / totalCount) * 100) : 0;
 
   // Loading Screen
   if (isLoading && !hasStarted) {
@@ -440,6 +586,37 @@ export const AssessmentTakePage: React.FC = () => {
             {currentQuestion.prompt}
           </h2>
 
+          {/* Failed Save Error Feedback */}
+          {failedQuestions[currentQuestion.id] && (
+            <div
+              role="alert"
+              style={{
+                padding: '10px 14px',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                borderLeft: '4px solid var(--danger, #ef4444)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '13px',
+                color: 'var(--danger, #ef4444)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <span>⚠️ {failedQuestions[currentQuestion.id]}</span>
+              {answers[currentQuestion.id] && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    handleSelectOption(currentQuestion.id, answers[currentQuestion.id])
+                  }
+                >
+                  Retry Save
+                </Button>
+              )}
+            </div>
+          )}
+
           {/* Options List */}
           <div
             role="radiogroup"
@@ -582,7 +759,9 @@ export const AssessmentTakePage: React.FC = () => {
           aria-label="Question jump palette"
         >
           {questions.map((q, idx) => {
-            const isAnswered = Boolean(answers[q.id]);
+            const isAnswered = Boolean(persistedAnswers[q.id]);
+            const hasFailed = Boolean(failedQuestions[q.id]);
+            const isPending = pendingSaves.has(q.id);
             const isCurrent = idx === currentIndex;
 
             return (
@@ -590,26 +769,40 @@ export const AssessmentTakePage: React.FC = () => {
                 key={q.id}
                 type="button"
                 onClick={() => setCurrentIndex(idx)}
-                aria-label={`Jump to question ${idx + 1}${isAnswered ? ' (Answered)' : ' (Unanswered)'}`}
+                aria-label={`Jump to question ${idx + 1}${
+                  hasFailed
+                    ? ' (Save Failed)'
+                    : isPending
+                    ? ' (Saving)'
+                    : isAnswered
+                    ? ' (Answered)'
+                    : ' (Unanswered)'
+                }`}
                 style={{
                   height: '36px',
                   borderRadius: 'var(--radius-sm)',
                   border: isCurrent
                     ? '2px solid var(--primary)'
+                    : hasFailed
+                    ? '1px solid var(--danger, #ef4444)'
                     : isAnswered
                     ? '1px solid rgba(99, 102, 241, 0.4)'
                     : '1px solid var(--border-subtle)',
                   backgroundColor: isCurrent
                     ? 'rgba(99, 102, 241, 0.25)'
+                    : hasFailed
+                    ? 'rgba(239, 68, 68, 0.15)'
                     : isAnswered
                     ? 'rgba(99, 102, 241, 0.12)'
                     : 'var(--bg-base)',
                   color: isCurrent
                     ? 'var(--primary)'
+                    : hasFailed
+                    ? 'var(--danger, #ef4444)'
                     : isAnswered
                     ? 'var(--text-main)'
                     : 'var(--text-dim)',
-                  fontWeight: isCurrent || isAnswered ? 700 : 500,
+                  fontWeight: isCurrent || isAnswered || hasFailed ? 700 : 500,
                   fontSize: '12px',
                   cursor: 'pointer',
                   transition: 'all 0.1s ease',
@@ -636,29 +829,95 @@ export const AssessmentTakePage: React.FC = () => {
         title="Finalize & Submit Assessment"
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-          {unansweredIndices.length > 0 ? (
+          {failedIndices.length > 0 ? (
             <div
               style={{
-                padding: '12px 14px',
+                padding: '14px 16px',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                borderLeft: '4px solid var(--danger, #ef4444)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '13px',
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: '6px', color: 'var(--danger, #ef4444)' }}>
+                ⚠️ Save Failed ({failedIndices.length} Remaining)
+              </div>
+              <p style={{ margin: '0 0 10px 0', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                {failedIndices.length === 1
+                  ? `Question #${failedIndices[0] + 1} failed to save due to a network error.`
+                  : `Questions ${failedIndices.map((i) => `#${i + 1}`).join(', ')} failed to save.`}{' '}
+                Answers must be successfully saved to the server before results can be computed.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setCurrentIndex(failedIndices[0]);
+                  setIsSubmitModalOpen(false);
+                }}
+              >
+                Jump to Question #{failedIndices[0] + 1} to Retry →
+              </Button>
+            </div>
+          ) : isSavingAny ? (
+            <div
+              style={{
+                padding: '14px 16px',
+                backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                borderLeft: '4px solid var(--primary, #6366f1)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '13px',
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: '6px', color: 'var(--primary, #6366f1)' }}>
+                ⏳ Saving Answers in Progress...
+              </div>
+              <p style={{ margin: 0, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                Your responses are currently being securely transmitted to the server. Please wait a moment.
+              </p>
+            </div>
+          ) : unpersistedIndices.length > 0 ? (
+            <div
+              style={{
+                padding: '14px 16px',
                 backgroundColor: 'rgba(245, 158, 11, 0.1)',
                 borderLeft: '4px solid var(--warning, #f59e0b)',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '13px',
               }}
             >
-              <strong>Notice:</strong> You have {unansweredIndices.length} unanswered questions (
-              {unansweredIndices.slice(0, 5).map((i) => `#${i + 1}`).join(', ')}
-              {unansweredIndices.length > 5 ? '...' : ''}). We recommend answering all questions for the most accurate career alignment.
+              <div style={{ fontWeight: 700, marginBottom: '6px', color: 'var(--text-main)' }}>
+                ⚠️ Completion Required ({unpersistedIndices.length} Remaining)
+              </div>
+              <p style={{ margin: '0 0 10px 0', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                All {totalCount} questions must be answered before your results can be calculated. Unanswered questions:{' '}
+                <strong>
+                  {unpersistedIndices.slice(0, 5).map((i) => `#${i + 1}`).join(', ')}
+                  {unpersistedIndices.length > 5 ? ` and ${unpersistedIndices.length - 5} more` : ''}
+                </strong>
+                .
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setCurrentIndex(unpersistedIndices[0]);
+                  setIsSubmitModalOpen(false);
+                }}
+              >
+                Jump to Question #{unpersistedIndices[0] + 1} →
+              </Button>
             </div>
           ) : (
             <div
               style={{
-                padding: '12px 14px',
+                padding: '14px 16px',
                 backgroundColor: 'rgba(16, 185, 129, 0.1)',
                 borderLeft: '4px solid var(--success, #10b981)',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '13px',
                 color: 'var(--success, #10b981)',
+                fontWeight: 600,
               }}
             >
               ✓ All {totalCount} questions have been answered!
@@ -700,10 +959,14 @@ export const AssessmentTakePage: React.FC = () => {
               Keep Editing
             </Button>
             <Button
-              disabled={isSubmitting}
+              disabled={isSubmitting || isSavingAny || unpersistedIndices.length > 0 || failedIndices.length > 0}
               onClick={handleSubmitAssessment}
             >
-              {isSubmitting ? 'Calculating Profile...' : 'Confirm & Calculate Results'}
+              {isSubmitting
+                ? 'Calculating Profile...'
+                : isSavingAny
+                ? 'Saving Answers...'
+                : 'Confirm & Calculate Results'}
             </Button>
           </div>
         </div>
