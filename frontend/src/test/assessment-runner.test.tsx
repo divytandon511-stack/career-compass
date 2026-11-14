@@ -377,4 +377,140 @@ describe('Assessment Runner (AssessmentTakePage)', () => {
     // Should have jumped to question 2 (first unanswered)
     expect(await screen.findByText('Question 2 of 2')).toBeInTheDocument();
   });
+
+  it('prevents race conditions when changing options rapidly so outdated responses are ignored', async () => {
+    vi.mocked(assessmentApi.getAssessment).mockResolvedValueOnce({
+      data: { id: 'asm-test', title: 'Exploration', version: 1, status: 'PUBLISHED' },
+    });
+    vi.mocked(assessmentApi.getQuestions).mockResolvedValueOnce({
+      data: { assessmentId: 'asm-test', version: 1, questions: mockQuestions },
+    });
+    vi.mocked(assessmentApi.startAttempt).mockResolvedValueOnce({
+      data: { id: 'att-123', assessmentId: 'asm-test', assessmentVersion: 1, status: 'IN_PROGRESS', startedAt: '2026-11-14T00:00:00Z' },
+    });
+    vi.mocked(assessmentApi.getAttempt).mockResolvedValueOnce({
+      data: { id: 'att-123', assessmentId: 'asm-test', status: 'IN_PROGRESS', startedAt: '2026-11-14T00:00:00Z', answers: [] },
+    });
+
+    let resolveFirstSave: (val: any) => void;
+    let resolveSecondSave: (val: any) => void;
+
+    // First save is slow
+    vi.mocked(assessmentApi.saveAnswer).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirstSave = resolve;
+        })
+    );
+    // Second save resolves quickly
+    vi.mocked(assessmentApi.saveAnswer).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSecondSave = resolve;
+        })
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/assessments/asm-test/take']}>
+        <Routes>
+          <Route path="/assessments/:id/take" element={<AssessmentTakePage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByText('Begin Assessment Questions →'));
+
+    // Student selects Option 1 ("Strongly Disagree")
+    const opt1 = await screen.findByRole('radio', { name: /Strongly Disagree/i });
+    fireEvent.click(opt1);
+
+    // Student immediately switches to Option 2 ("Disagree Key 2") before first finishes
+    const opt2 = await screen.findByRole('radio', { name: /Disagree Key 2/i });
+    fireEvent.click(opt2);
+
+    // Now resolve second save first
+    resolveSecondSave!({
+      data: { id: 'ans-2', attemptId: 'att-123', questionId: 'q-1', selectedOptionId: 'opt-1-2' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('✓ Saved')).toBeInTheDocument();
+    });
+
+    // Now resolve first save (out-of-order late arrival)
+    resolveFirstSave!({
+      data: { id: 'ans-1', attemptId: 'att-123', questionId: 'q-1', selectedOptionId: 'opt-1-1' },
+    });
+
+    // The UI radio selection must STILL be Disagree (Option 2), not corrupted by Option 1
+    expect(opt2).toHaveAttribute('aria-checked', 'true');
+    expect(opt1).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('strictly blocks submission when answer saves have failed and prevents silent persistence', async () => {
+    vi.mocked(assessmentApi.getAssessment).mockResolvedValueOnce({
+      data: { id: 'asm-test', title: 'Exploration', version: 1, status: 'PUBLISHED' },
+    });
+    vi.mocked(assessmentApi.getQuestions).mockResolvedValueOnce({
+      data: { assessmentId: 'asm-test', version: 1, questions: mockQuestions },
+    });
+    vi.mocked(assessmentApi.startAttempt).mockResolvedValueOnce({
+      data: { id: 'att-123', assessmentId: 'asm-test', assessmentVersion: 1, status: 'IN_PROGRESS', startedAt: '2026-11-14T00:00:00Z' },
+    });
+    vi.mocked(assessmentApi.getAttempt).mockResolvedValueOnce({
+      data: {
+        id: 'att-123',
+        assessmentId: 'asm-test',
+        status: 'IN_PROGRESS',
+        startedAt: '2026-11-14T00:00:00Z',
+        answers: [
+          // Question 1 is already answered
+          { questionId: 'q-1', selectedOptionId: 'opt-1-5', answeredAt: '2026-11-14T00:01:00Z' },
+        ],
+      },
+    });
+
+    // Question 2 save fails with network timeout
+    vi.mocked(assessmentApi.saveAnswer).mockRejectedValueOnce(new Error('HTTP 503 Service Unavailable'));
+
+    render(
+      <MemoryRouter initialEntries={['/assessments/asm-test/take']}>
+        <Routes>
+          <Route path="/assessments/:id/take" element={<AssessmentTakePage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByText('Begin Assessment Questions →'));
+
+    // Question 2 is auto-selected because question 1 was hydrated
+    expect(await screen.findByText('Question 2 of 2')).toBeInTheDocument();
+
+    // Select an option for question 2 (which fails)
+    const optAgree = screen.getByRole('radio', { name: /Strongly Agree/i });
+    fireEvent.click(optAgree);
+
+    // Failure alert appears
+    const failureAlert = await screen.findByRole('alert');
+    expect(failureAlert).toHaveTextContent(/HTTP 503 Service Unavailable/i);
+
+    // Open submit review modal
+    const reviewBtn = screen.getByRole('button', { name: /Review & Finalize Assessment/i });
+    fireEvent.click(reviewBtn);
+
+    // Modal dialog must show save failure banner, NOT all answered!
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText(/Save Failed \(1 Remaining\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Question #2 failed to save due to a network error/i)).toBeInTheDocument();
+
+    // Confirm button MUST be disabled
+    const confirmBtn = screen.getByText('Confirm & Calculate Results');
+    expect(confirmBtn).toBeDisabled();
+
+    // Click retry button in modal jumps to failed question
+    const retryJumpBtn = screen.getByText(/Jump to Question #2 to Retry →/i);
+    fireEvent.click(retryJumpBtn);
+
+    expect(await screen.findByText('Question 2 of 2')).toBeInTheDocument();
+  });
 });
