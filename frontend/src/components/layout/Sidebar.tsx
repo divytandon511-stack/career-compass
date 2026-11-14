@@ -58,6 +58,7 @@ export const Sidebar: React.FC = () => {
             <NavLink to="/counsellors" style={navLinkStyle}>Counsellors</NavLink>
             <NavLink to="/bookings" style={navLinkStyle}>My Bookings</NavLink>
             <NavLink to="/guidance" style={navLinkStyle}>MargDarshak AI</NavLink>
+            <NavLink to="/profile" style={navLinkStyle}>My Profile</NavLink>
           </div>
         </div>
       )}

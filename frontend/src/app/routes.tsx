@@ -15,6 +15,7 @@ import { RecommendationsPage } from '@/pages/student/RecommendationsPage';
 import { CareerExplorerPage } from '@/pages/student/CareerExplorerPage';
 import { CareerDetailPage } from '@/pages/student/CareerDetailPage';
 import { SavedCareersPage } from '@/pages/student/SavedCareersPage';
+import { ProfilePage } from '@/pages/student/ProfilePage';
 import { CounsellorsPage } from '@/pages/student/CounsellorsPage';
 import { CounsellorBookPage } from '@/pages/student/CounsellorBookPage';
 import { BookingsPage } from '@/pages/student/BookingsPage';
@@ -116,6 +117,16 @@ export const AppRoutes: React.FC = () => {
           <ProtectedRoute>
             <RoleGuard allowedRoles={['STUDENT']}>
               <AppLayout><SavedCareersPage /></AppLayout>
+            </RoleGuard>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <RoleGuard allowedRoles={['STUDENT', 'COUNSELLOR', 'ADMIN']}>
+              <AppLayout><ProfilePage /></AppLayout>
             </RoleGuard>
           </ProtectedRoute>
         }

@@ -19,6 +19,8 @@ export const DIMENSIONS: readonly Dimension[] = [
   'INVESTIGATIVE',
 ] as const;
 
+export const CANONICAL_DIMENSIONS = DIMENSIONS;
+
 export interface DimensionConfig {
   label: string;
   color: string;

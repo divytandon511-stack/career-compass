@@ -211,3 +211,16 @@ export interface Booking {
   slot?: AvailabilitySlot;
   counsellor?: CounsellorProfile;
 }
+
+export interface OverviewAnalytics {
+  users: number;
+  attempts: number;
+  completedAttempts: number;
+  bookings: number;
+  publishedCareers: number;
+}
+
+export interface CareerInterestAnalytic {
+  dimension: Dimension;
+  total: number;
+}
