@@ -28,6 +28,7 @@ export const createApp = ({
   registerLimiter,
   loginLimiter,
   refreshLimiter,
+  apiLimiter,
   csrfProtection,
   assessmentService,
   assessmentRepository,
@@ -67,15 +68,17 @@ export const createApp = ({
   app.use(cookieParserMiddleware);
 
   // 4. Global API Rate Limiting
-  const limiter = rateLimit({
-    windowMs: env.RATE_LIMIT_WINDOW_MS,
-    max: env.RATE_LIMIT_MAX,
-    standardHeaders: true,
-    legacyHeaders: false,
-    handler: (req, res, next) => {
-      next(new AppError('RATE_LIMIT_EXCEEDED', 'Too many requests, please try again later.', 429));
-    },
-  });
+  const limiter =
+    apiLimiter ||
+    rateLimit({
+      windowMs: env.RATE_LIMIT_WINDOW_MS,
+      max: env.RATE_LIMIT_MAX,
+      standardHeaders: true,
+      legacyHeaders: false,
+      handler: (req, res, next) => {
+        next(new AppError('RATE_LIMIT_EXCEEDED', 'Too many requests, please try again later.', 429));
+      },
+    });
   app.use(limiter);
 
   // 5. JSON Body Parsing with configurable size limit

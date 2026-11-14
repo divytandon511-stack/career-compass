@@ -52,8 +52,12 @@ export const createAssessmentController = ({ assessmentService } = {}) => {
         const result = await assessmentService.getQuestions({
           user: req.user,
           assessmentId: req.params.id,
+          query: req.query,
         });
-        return res.status(200).json({ data: result });
+        if (result.meta) {
+          return res.status(200).json({ data: result.data, meta: result.meta });
+        }
+        return res.status(200).json({ data: result.data || result });
       } catch (error) {
         next(error);
       }

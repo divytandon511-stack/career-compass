@@ -97,5 +97,82 @@ describe('AssessmentService', () => {
       limit: 20,
     });
   });
+
+  it('validates question list queries and passes parameters to repository', async () => {
+    const assessmentRepository = {
+      getQuestions: vi.fn().mockResolvedValue({
+        data: { assessmentId, version: 1, questions: [] },
+        meta: { page: 2, limit: 10, total: 30, totalPages: 3 },
+      }),
+    };
+    const service = new AssessmentService({ assessmentRepository });
+
+    await service.getQuestions({
+      user,
+      assessmentId,
+      query: { page: '2', limit: '10' },
+    });
+
+    expect(assessmentRepository.getQuestions).toHaveBeenCalledWith({
+      role: 'STUDENT',
+      assessmentId,
+      page: 2,
+      limit: 10,
+    });
+  });
+
+  it('delegates listAssessments, getAssessment, startAttempt, listAttempts, and submitAttempt', async () => {
+    const assessmentRepository = {
+      listAssessments: vi.fn().mockResolvedValue({ data: [], meta: {} }),
+      getAssessment: vi.fn().mockResolvedValue({ id: assessmentId }),
+      createAttempt: vi.fn().mockResolvedValue({ id: attemptId }),
+      listAttempts: vi.fn().mockResolvedValue({ data: [], meta: {} }),
+      finalizeAttempt: vi.fn().mockResolvedValue({ attemptId, status: 'COMPLETED' }),
+    };
+    const service = new AssessmentService({ assessmentRepository });
+
+    await service.listAssessments({ user, query: { sort: 'title', order: 'asc' } });
+    expect(assessmentRepository.listAssessments).toHaveBeenCalledWith({
+      role: 'STUDENT',
+      page: 1,
+      limit: 20,
+      sort: 'title',
+      order: 'asc',
+    });
+
+    await service.getAssessment({ user, assessmentId });
+    expect(assessmentRepository.getAssessment).toHaveBeenCalledWith({
+      role: 'STUDENT',
+      assessmentId,
+    });
+
+    await service.startAttempt({ user, assessmentId });
+    expect(assessmentRepository.createAttempt).toHaveBeenCalledWith({
+      studentId: user.id,
+      assessmentId,
+    });
+
+    await service.listAttempts({ user, query: { status: 'IN_PROGRESS' } });
+    expect(assessmentRepository.listAttempts).toHaveBeenCalledWith({
+      studentId: user.id,
+      page: 1,
+      limit: 20,
+      status: 'IN_PROGRESS',
+      sort: 'startedAt',
+      order: 'desc',
+    });
+
+    await service.submitAttempt({ user, attemptId });
+    expect(assessmentRepository.finalizeAttempt).toHaveBeenCalledWith({
+      studentId: user.id,
+      attemptId,
+    });
+  });
+
+  it('throws when initialized without assessmentRepository', () => {
+    expect(() => new AssessmentService()).toThrow(
+      'AssessmentService requires an assessmentRepository dependency'
+    );
+  });
 });
 

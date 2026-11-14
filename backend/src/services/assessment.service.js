@@ -8,6 +8,7 @@ import {
   attemptListQuerySchema,
   paginationQuerySchema,
   questionIdSchema,
+  questionListQuerySchema,
 } from '../validators/assessment.validator.js';
 
 const parse = (schema, payload) => {
@@ -41,9 +42,14 @@ export class AssessmentService {
     return this.assessmentRepository.getAssessment({ role: user.role, assessmentId: id });
   }
 
-  getQuestions({ user, assessmentId }) {
+  getQuestions({ user, assessmentId, query }) {
     const { id } = parse(assessmentIdSchema, { id: assessmentId });
-    return this.assessmentRepository.getQuestions({ role: user.role, assessmentId: id });
+    const parsedQuery = query ? parse(questionListQuerySchema, query) : {};
+    return this.assessmentRepository.getQuestions({
+      role: user.role,
+      assessmentId: id,
+      ...parsedQuery,
+    });
   }
 
   startAttempt({ user, assessmentId }) {

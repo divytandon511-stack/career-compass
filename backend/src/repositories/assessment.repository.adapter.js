@@ -155,7 +155,7 @@ export class AssessmentRepositoryAdapter {
     }
   }
 
-  async getQuestions({ assessmentId, role } = {}) {
+  async getQuestions({ assessmentId, role, page, limit } = {}) {
     assertDelegate(this.dbClient, 'assessment');
     try {
       const assessment = await this.dbClient.assessment.findUnique({
@@ -165,12 +165,31 @@ export class AssessmentRepositoryAdapter {
       if (!assessment || (role !== 'ADMIN' && assessment.status !== 'PUBLISHED')) {
         throw new AppError('NOT_FOUND', 'Assessment not found', 404);
       }
+      const mappedQuestions = assessment.questions.map((question) =>
+        mapQuestion(question, { exposeValues: role === 'ADMIN' })
+      );
+
+      const isPaginated = page !== undefined || limit !== undefined;
+      if (isPaginated) {
+        const pagination = normalizePage({ page, limit });
+        const start = (pagination.page - 1) * pagination.limit;
+        const sliced = mappedQuestions.slice(start, start + pagination.limit);
+        return {
+          data: {
+            assessmentId: assessment.id,
+            version: assessment.version,
+            questions: sliced,
+          },
+          meta: paginationMeta({ ...pagination, total: mappedQuestions.length }),
+        };
+      }
+
       return {
-        assessmentId: assessment.id,
-        version: assessment.version,
-        questions: assessment.questions.map((question) =>
-          mapQuestion(question, { exposeValues: role === 'ADMIN' })
-        ),
+        data: {
+          assessmentId: assessment.id,
+          version: assessment.version,
+          questions: mappedQuestions,
+        },
       };
     } catch (error) {
       if (error instanceof AppError) throw error;
@@ -182,10 +201,13 @@ export class AssessmentRepositoryAdapter {
     assertDelegate(this.dbClient, 'assessment');
     assertDelegate(this.dbClient, 'assessmentAttempt');
     try {
-      const assessment = await this.dbClient.assessment.findFirst({
-        where: { id: assessmentId, status: 'PUBLISHED' },
+      const assessment = await this.dbClient.assessment.findUnique({
+        where: { id: assessmentId },
       });
       if (!assessment) throw new AppError('NOT_FOUND', 'Assessment not found', 404);
+      if (assessment.status !== 'PUBLISHED') {
+        throw new AppError('CONFLICT', 'Assessment is not published', 409);
+      }
       const existingAttempt = await this.dbClient.assessmentAttempt.findFirst({
         where: {
           assessmentId: assessment.id,
@@ -198,8 +220,10 @@ export class AssessmentRepositoryAdapter {
         return {
           id: existingAttempt.id,
           assessmentId: existingAttempt.assessmentId,
+          assessmentVersion: existingAttempt.assessmentVersion,
           status: existingAttempt.status,
           startedAt: existingAttempt.startedAt,
+          isResumed: true,
         };
       }
       const attempt = await this.dbClient.assessmentAttempt.create({
@@ -213,8 +237,10 @@ export class AssessmentRepositoryAdapter {
       return {
         id: attempt.id,
         assessmentId: attempt.assessmentId,
+        assessmentVersion: attempt.assessmentVersion,
         status: attempt.status,
         startedAt: attempt.startedAt,
+        isResumed: false,
       };
     } catch (error) {
       if (error instanceof AppError) throw error;
@@ -269,7 +295,9 @@ export class AssessmentRepositoryAdapter {
 
   async saveAnswer({ attemptId, studentId, questionId, selectedOptionId } = {}) {
     if (typeof this.dbClient.$transaction !== 'function') {
-      throw new Error('Database transaction capability ($transaction) is required');
+      const error = new Error('Database transaction capability ($transaction) is required');
+      error.code = 'TRANSACTION_UNAVAILABLE';
+      throw error;
     }
     try {
       return await this.dbClient.$transaction(async (tx) => {
@@ -318,7 +346,9 @@ export class AssessmentRepositoryAdapter {
 
   async finalizeAttempt({ attemptId, studentId } = {}) {
     if (typeof this.dbClient.$transaction !== 'function') {
-      throw new Error('Database transaction capability ($transaction) is required');
+      const error = new Error('Database transaction capability ($transaction) is required');
+      error.code = 'TRANSACTION_UNAVAILABLE';
+      throw error;
     }
     try {
       return await this.dbClient.$transaction(async (tx) => {
@@ -358,6 +388,7 @@ export class AssessmentRepositoryAdapter {
         });
         const ranked = rankCareers(scoring.scores, careers);
         const algorithmVersion = ranked[0]?.algorithmVersion || 'cosine-v1';
+        const completedAt = new Date();
 
         await tx.assessmentAttempt.update({
           where: { id: attemptId },
@@ -365,7 +396,7 @@ export class AssessmentRepositoryAdapter {
             status: 'COMPLETED',
             scoresJson: scoring.scores,
             algorithmVersion,
-            completedAt: new Date(),
+            completedAt,
           },
         });
 
@@ -396,7 +427,7 @@ export class AssessmentRepositoryAdapter {
           assessmentVersion: attempt.assessmentVersion,
           algorithmVersion,
           dimensionScores: scoring.scores,
-          completedAt: new Date(),
+          completedAt,
           recommendationsUrl: `/api/v1/attempts/${attemptId}/recommendations`,
         };
       });
@@ -412,9 +443,12 @@ export class AssessmentRepositoryAdapter {
     const pagination = normalizePage({ page, limit });
     try {
       const attempt = await this.dbClient.assessmentAttempt.findFirst({
-        where: { id: attemptId, studentId, status: 'COMPLETED' },
+        where: { id: attemptId, studentId },
       });
       if (!attempt) throw new AppError('NOT_FOUND', 'Assessment attempt not found', 404);
+      if (attempt.status !== 'COMPLETED') {
+        throw new AppError('CONFLICT', 'Assessment attempt is not completed', 409);
+      }
       const where = { attemptId };
       const [items, total] = await Promise.all([
         this.dbClient.recommendation.findMany({

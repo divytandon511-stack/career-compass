@@ -15,6 +15,13 @@ export const paginationQuerySchema = z
   })
   .strict();
 
+export const questionListQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+  })
+  .strict();
+
 export const assessmentListQuerySchema = paginationQuerySchema.extend({
   status: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED']).optional(),
   sort: z.enum(['title', 'createdAt']).default('title'),
