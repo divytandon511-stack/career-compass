@@ -49,7 +49,24 @@ export const AssessmentTakePage: React.FC = () => {
           setAssessment(assessRes.data);
         }
 
-        const questionList = questionsRes.data?.questions || [];
+        let questionList = questionsRes.data?.questions ? [...questionsRes.data.questions] : [];
+
+        // If the backend returned a paginated response with multiple pages, fetch remaining pages
+        if (questionsRes.meta && questionsRes.meta.totalPages > 1) {
+          const remainingPromises = [];
+          for (let p = 2; p <= questionsRes.meta.totalPages; p++) {
+            remainingPromises.push(
+              assessmentApi.getQuestions(assessmentId!, p, questionsRes.meta.limit)
+            );
+          }
+          const remainingResponses = await Promise.all(remainingPromises);
+          for (const resp of remainingResponses) {
+            if (resp.data?.questions) {
+              questionList = questionList.concat(resp.data.questions);
+            }
+          }
+        }
+
         // Sort questions by position ascending
         questionList.sort((a, b) => a.position - b.position);
         setQuestions(questionList);
@@ -111,15 +128,24 @@ export const AssessmentTakePage: React.FC = () => {
     }
   };
 
+  // Track in-flight save requests to prevent duplicate submissions
+  const savingQuestionsRef = React.useRef<Set<string>>(new Set());
+
   // Save answer to backend
   const handleSelectOption = useCallback(
     async (questionId: string, optionId: string) => {
       if (!attemptId) return;
 
+      // Deduplicate rapid accidental double clicks
+      if (savingQuestionsRef.current.has(questionId) && answers[questionId] === optionId) {
+        return;
+      }
+
       // Optimistic update
       setAnswers((prev) => ({ ...prev, [questionId]: optionId }));
       setSaveStatus('saving');
       setSaveErrorMessage(null);
+      savingQuestionsRef.current.add(questionId);
 
       try {
         await assessmentApi.saveAnswer(attemptId, questionId, optionId);
@@ -129,9 +155,11 @@ export const AssessmentTakePage: React.FC = () => {
         setSaveErrorMessage(
           err instanceof Error ? err.message : 'Failed to save answer. Click to retry.'
         );
+      } finally {
+        savingQuestionsRef.current.delete(questionId);
       }
     },
-    [attemptId]
+    [attemptId, answers]
   );
 
   // Final submission
@@ -639,26 +667,45 @@ export const AssessmentTakePage: React.FC = () => {
           {unansweredIndices.length > 0 ? (
             <div
               style={{
-                padding: '12px 14px',
+                padding: '14px 16px',
                 backgroundColor: 'rgba(245, 158, 11, 0.1)',
                 borderLeft: '4px solid var(--warning, #f59e0b)',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '13px',
               }}
             >
-              <strong>Notice:</strong> You have {unansweredIndices.length} unanswered questions (
-              {unansweredIndices.slice(0, 5).map((i) => `#${i + 1}`).join(', ')}
-              {unansweredIndices.length > 5 ? '...' : ''}). We recommend answering all questions for the most accurate career alignment.
+              <div style={{ fontWeight: 700, marginBottom: '6px', color: 'var(--text-main)' }}>
+                ⚠️ Completion Required ({unansweredIndices.length} Remaining)
+              </div>
+              <p style={{ margin: '0 0 10px 0', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                All {totalCount} questions must be answered before your results can be calculated. Unanswered questions:{' '}
+                <strong>
+                  {unansweredIndices.slice(0, 5).map((i) => `#${i + 1}`).join(', ')}
+                  {unansweredIndices.length > 5 ? ` and ${unansweredIndices.length - 5} more` : ''}
+                </strong>
+                .
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setCurrentIndex(unansweredIndices[0]);
+                  setIsSubmitModalOpen(false);
+                }}
+              >
+                Jump to Question #{unansweredIndices[0] + 1} →
+              </Button>
             </div>
           ) : (
             <div
               style={{
-                padding: '12px 14px',
+                padding: '14px 16px',
                 backgroundColor: 'rgba(16, 185, 129, 0.1)',
                 borderLeft: '4px solid var(--success, #10b981)',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '13px',
                 color: 'var(--success, #10b981)',
+                fontWeight: 600,
               }}
             >
               ✓ All {totalCount} questions have been answered!
@@ -700,7 +747,7 @@ export const AssessmentTakePage: React.FC = () => {
               Keep Editing
             </Button>
             <Button
-              disabled={isSubmitting}
+              disabled={isSubmitting || unansweredIndices.length > 0}
               onClick={handleSubmitAssessment}
             >
               {isSubmitting ? 'Calculating Profile...' : 'Confirm & Calculate Results'}

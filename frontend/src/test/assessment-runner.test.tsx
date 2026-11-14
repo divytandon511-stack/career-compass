@@ -248,4 +248,133 @@ describe('Assessment Runner (AssessmentTakePage)', () => {
     expect(await screen.findByText('Results Page Landed')).toBeInTheDocument();
     expect(assessmentApi.submitAttempt).toHaveBeenCalledWith('att-123');
   });
+
+  it('prevents submission when questions are unanswered and allows jumping to unanswered question', async () => {
+    vi.mocked(assessmentApi.getAssessment).mockResolvedValueOnce({
+      data: { id: 'asm-test', title: 'Exploration', version: 1, status: 'PUBLISHED' },
+    });
+    vi.mocked(assessmentApi.getQuestions).mockResolvedValueOnce({
+      data: { assessmentId: 'asm-test', version: 1, questions: mockQuestions },
+    });
+    vi.mocked(assessmentApi.startAttempt).mockResolvedValueOnce({
+      data: { id: 'att-123', assessmentId: 'asm-test', assessmentVersion: 1, status: 'IN_PROGRESS', startedAt: '2026-11-14T00:00:00Z' },
+    });
+    vi.mocked(assessmentApi.getAttempt).mockResolvedValueOnce({
+      data: {
+        id: 'att-123',
+        assessmentId: 'asm-test',
+        status: 'IN_PROGRESS',
+        startedAt: '2026-11-14T00:00:00Z',
+        answers: [
+          { questionId: 'q-1', selectedOptionId: 'opt-1-5', answeredAt: '2026-11-14T00:01:00Z' },
+        ],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/assessments/asm-test/take']}>
+        <Routes>
+          <Route path="/assessments/:id/take" element={<AssessmentTakePage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByText('Begin Assessment Questions →'));
+
+    // Click submit button while Question 2 is unanswered
+    const submitBtn = await screen.findByRole('button', { name: /Submit Assessment/i });
+    fireEvent.click(submitBtn);
+
+    // Modal appears
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText(/Completion Required \(1 Remaining\)/i)).toBeInTheDocument();
+
+    // Confirm button is disabled
+    const confirmBtn = screen.getByText('Confirm & Calculate Results');
+    expect(confirmBtn).toBeDisabled();
+
+    // Click "Jump to Question #2 →"
+    const jumpBtn = screen.getByText(/Jump to Question #2/i);
+    fireEvent.click(jumpBtn);
+
+    // Modal closes and question 2 is active
+    expect(await screen.findByText('Question 2 of 2')).toBeInTheDocument();
+  });
+
+  it('handles answer save failure gracefully and displays error alert while retaining selection', async () => {
+    vi.mocked(assessmentApi.getAssessment).mockResolvedValueOnce({
+      data: { id: 'asm-test', title: 'Exploration', version: 1, status: 'PUBLISHED' },
+    });
+    vi.mocked(assessmentApi.getQuestions).mockResolvedValueOnce({
+      data: { assessmentId: 'asm-test', version: 1, questions: mockQuestions },
+    });
+    vi.mocked(assessmentApi.startAttempt).mockResolvedValueOnce({
+      data: { id: 'att-123', assessmentId: 'asm-test', assessmentVersion: 1, status: 'IN_PROGRESS', startedAt: '2026-11-14T00:00:00Z' },
+    });
+    vi.mocked(assessmentApi.getAttempt).mockResolvedValueOnce({
+      data: { id: 'att-123', assessmentId: 'asm-test', status: 'IN_PROGRESS', startedAt: '2026-11-14T00:00:00Z', answers: [] },
+    });
+    vi.mocked(assessmentApi.saveAnswer).mockRejectedValueOnce(new Error('Network connection timeout'));
+
+    render(
+      <MemoryRouter initialEntries={['/assessments/asm-test/take']}>
+        <Routes>
+          <Route path="/assessments/:id/take" element={<AssessmentTakePage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByText('Begin Assessment Questions →'));
+
+    const stronglyAgreeOpt = await screen.findByRole('radio', { name: /Strongly Agree/i });
+    fireEvent.click(stronglyAgreeOpt);
+
+    // Expect error message to be displayed
+    expect(await screen.findByText('Network connection timeout')).toBeInTheDocument();
+  });
+
+  it('resumes an in-progress attempt with hydrated answers and navigates to first unanswered', async () => {
+    vi.mocked(assessmentApi.getAssessment).mockResolvedValueOnce({
+      data: { id: 'asm-test', title: 'Exploration', version: 1, status: 'PUBLISHED' },
+    });
+    vi.mocked(assessmentApi.getQuestions).mockResolvedValueOnce({
+      data: { assessmentId: 'asm-test', version: 1, questions: mockQuestions },
+    });
+    vi.mocked(assessmentApi.startAttempt).mockResolvedValueOnce({
+      data: {
+        id: 'att-123',
+        assessmentId: 'asm-test',
+        assessmentVersion: 1,
+        status: 'IN_PROGRESS',
+        isResumed: true,
+        startedAt: '2026-11-14T00:00:00Z',
+      },
+    });
+    vi.mocked(assessmentApi.getAttempt).mockResolvedValueOnce({
+      data: {
+        id: 'att-123',
+        assessmentId: 'asm-test',
+        status: 'IN_PROGRESS',
+        startedAt: '2026-11-14T00:00:00Z',
+        answers: [
+          { questionId: 'q-1', selectedOptionId: 'opt-1-5', answeredAt: '2026-11-14T00:01:00Z' },
+        ],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/assessments/asm-test/take']}>
+        <Routes>
+          <Route path="/assessments/:id/take" element={<AssessmentTakePage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByText('Begin Assessment Questions →'));
+
+    // Should detect resumed state
+    expect(await screen.findByText(/\(Resumed Session\)/i)).toBeInTheDocument();
+    // Should have jumped to question 2 (first unanswered)
+    expect(await screen.findByText('Question 2 of 2')).toBeInTheDocument();
+  });
 });

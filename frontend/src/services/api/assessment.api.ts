@@ -55,10 +55,43 @@ export const assessmentApi = {
 
   /**
    * Fetches questions for an assessment without exposing weights or scoring values.
+   * Supports optional pagination (page, limit).
    * GET /api/v1/assessments/:assessmentId/questions
    */
-  async getQuestions(assessmentId: string) {
-    return apiClient<AssessmentQuestionsResponse>(`/assessments/${assessmentId}/questions`);
+  async getQuestions(assessmentId: string, page?: number, limit?: number) {
+    const query = new URLSearchParams();
+    if (page) query.set('page', String(page));
+    if (limit) query.set('limit', String(limit));
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    return apiClient<AssessmentQuestionsResponse>(`/assessments/${assessmentId}/questions${qs}`);
+  },
+
+  /**
+   * Fetches all questions for an assessment, automatically resolving all pages if paginated.
+   */
+  async getAllQuestions(assessmentId: string): Promise<AssessmentQuestionsResponse> {
+    const firstPage = await this.getQuestions(assessmentId);
+    let questions = firstPage.data?.questions ? [...firstPage.data.questions] : [];
+    const meta = firstPage.meta;
+
+    if (meta && meta.totalPages > 1) {
+      const remainingPages: Promise<{ data?: AssessmentQuestionsResponse }>[] = [];
+      for (let p = 2; p <= meta.totalPages; p++) {
+        remainingPages.push(this.getQuestions(assessmentId, p, meta.limit));
+      }
+      const results = await Promise.all(remainingPages);
+      for (const res of results) {
+        if (res.data?.questions) {
+          questions = questions.concat(res.data.questions);
+        }
+      }
+    }
+
+    return {
+      assessmentId: firstPage.data?.assessmentId || assessmentId,
+      version: firstPage.data?.version || 1,
+      questions: questions.sort((a, b) => a.position - b.position),
+    };
   },
 
   /**
