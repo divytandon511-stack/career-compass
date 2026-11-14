@@ -378,7 +378,7 @@ describe('Assessment Runner (AssessmentTakePage)', () => {
     expect(await screen.findByText('Question 2 of 2')).toBeInTheDocument();
   });
 
-  it('prevents race conditions when changing options rapidly so outdated responses are ignored', async () => {
+  it('serializes answer saves per question, ensuring subsequent option is queued and final server write is latest selection', async () => {
     vi.mocked(assessmentApi.getAssessment).mockResolvedValueOnce({
       data: { id: 'asm-test', title: 'Exploration', version: 1, status: 'PUBLISHED' },
     });
@@ -395,14 +395,14 @@ describe('Assessment Runner (AssessmentTakePage)', () => {
     let resolveFirstSave: (val: any) => void;
     let resolveSecondSave: (val: any) => void;
 
-    // First save is slow
+    // First save is held in flight
     vi.mocked(assessmentApi.saveAnswer).mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           resolveFirstSave = resolve;
         })
     );
-    // Second save resolves quickly
+    // Second save is queued behind first
     vi.mocked(assessmentApi.saveAnswer).mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -424,11 +424,33 @@ describe('Assessment Runner (AssessmentTakePage)', () => {
     const opt1 = await screen.findByRole('radio', { name: /Strongly Disagree/i });
     fireEvent.click(opt1);
 
-    // Student immediately switches to Option 2 ("Disagree Key 2") before first finishes
+    // Save 1 has been called with opt-1-1
+    expect(assessmentApi.saveAnswer).toHaveBeenCalledTimes(1);
+    expect(assessmentApi.saveAnswer).toHaveBeenCalledWith('att-123', 'q-1', 'opt-1-1');
+
+    // Student immediately switches to Option 2 ("Disagree Key 2") while save 1 is still in flight
     const opt2 = await screen.findByRole('radio', { name: /Disagree Key 2/i });
     fireEvent.click(opt2);
 
-    // Now resolve second save first
+    // UI optimistically shows Disagree selected
+    expect(opt2).toHaveAttribute('aria-checked', 'true');
+
+    // CRITICAL: Save 2 has NOT been dispatched to the server yet because save 1 is still in flight!
+    // This guarantees server-side serialization and eliminates out-of-order writes in database!
+    expect(assessmentApi.saveAnswer).toHaveBeenCalledTimes(1);
+
+    // Now complete the first server write
+    resolveFirstSave!({
+      data: { id: 'ans-1', attemptId: 'att-123', questionId: 'q-1', selectedOptionId: 'opt-1-1' },
+    });
+
+    // The sequential worker now immediately dispatches the queued second save to the server
+    await waitFor(() => {
+      expect(assessmentApi.saveAnswer).toHaveBeenCalledTimes(2);
+    });
+    expect(assessmentApi.saveAnswer).toHaveBeenLastCalledWith('att-123', 'q-1', 'opt-1-2');
+
+    // Complete the second server write
     resolveSecondSave!({
       data: { id: 'ans-2', attemptId: 'att-123', questionId: 'q-1', selectedOptionId: 'opt-1-2' },
     });
@@ -437,17 +459,98 @@ describe('Assessment Runner (AssessmentTakePage)', () => {
       expect(screen.getByText('✓ Saved')).toBeInTheDocument();
     });
 
-    // Now resolve first save (out-of-order late arrival)
-    resolveFirstSave!({
-      data: { id: 'ans-1', attemptId: 'att-123', questionId: 'q-1', selectedOptionId: 'opt-1-1' },
-    });
-
-    // The UI radio selection must STILL be Disagree (Option 2), not corrupted by Option 1
+    // Both UI and final server-side persisted value are confirmed to be opt-1-2 (Option 2)
     expect(opt2).toHaveAttribute('aria-checked', 'true');
-    expect(opt1).toHaveAttribute('aria-checked', 'false');
+    expect(assessmentApi.saveAnswer).toHaveBeenLastCalledWith('att-123', 'q-1', 'opt-1-2');
   });
 
-  it('strictly blocks submission when answer saves have failed and prevents silent persistence', async () => {
+  it('does not allow submission while any answer save request is in flight', async () => {
+    vi.mocked(assessmentApi.getAssessment).mockResolvedValueOnce({
+      data: { id: 'asm-test', title: 'Exploration', version: 1, status: 'PUBLISHED' },
+    });
+    vi.mocked(assessmentApi.getQuestions).mockResolvedValueOnce({
+      data: { assessmentId: 'asm-test', version: 1, questions: mockQuestions },
+    });
+    vi.mocked(assessmentApi.startAttempt).mockResolvedValueOnce({
+      data: { id: 'att-123', assessmentId: 'asm-test', assessmentVersion: 1, status: 'IN_PROGRESS', startedAt: '2026-11-14T00:00:00Z' },
+    });
+    vi.mocked(assessmentApi.getAttempt).mockResolvedValueOnce({
+      data: {
+        id: 'att-123',
+        assessmentId: 'asm-test',
+        status: 'IN_PROGRESS',
+        startedAt: '2026-11-14T00:00:00Z',
+        answers: [
+          // Question 1 already answered
+          { questionId: 'q-1', selectedOptionId: 'opt-1-5', answeredAt: '2026-11-14T00:01:00Z' },
+        ],
+      },
+    });
+
+    let resolveQ2Save: (val: any) => void;
+    vi.mocked(assessmentApi.saveAnswer).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveQ2Save = resolve;
+        })
+    );
+    vi.mocked(assessmentApi.submitAttempt).mockResolvedValueOnce({
+      data: {
+        attemptId: 'att-123',
+        status: 'COMPLETED',
+        assessmentVersion: 1,
+        algorithmVersion: 'cosine-v1',
+        dimensionScores: { ANALYTICAL: 1, CREATIVE: 1 },
+        completedAt: '2026-11-14T00:10:00Z',
+        recommendationsUrl: '/api/v1/attempts/att-123/recommendations',
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/assessments/asm-test/take']}>
+        <Routes>
+          <Route path="/assessments/:id/take" element={<AssessmentTakePage />} />
+          <Route path="/attempts/:id/results" element={<div>Results Page Landed</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByText('Begin Assessment Questions →'));
+    expect(await screen.findByText('Question 2 of 2')).toBeInTheDocument();
+
+    // Select option for Question 2 (held in flight)
+    const optAgree = screen.getByRole('radio', { name: /Strongly Agree/i });
+    fireEvent.click(optAgree);
+
+    // Open submit review modal while save is still in flight
+    const reviewBtn = screen.getByRole('button', { name: /Review & Finalize Assessment/i });
+    fireEvent.click(reviewBtn);
+
+    // Modal appears and shows in-flight saving banner
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText(/Saving Answers in Progress/i)).toBeInTheDocument();
+
+    // Confirm button MUST be disabled while any save is in flight
+    const confirmBtn = screen.getByText('Saving Answers...');
+    expect(confirmBtn).toBeDisabled();
+
+    // Resolving the in-flight server save completes persistence
+    resolveQ2Save!({
+      data: { id: 'ans-2', attemptId: 'att-123', questionId: 'q-2', selectedOptionId: 'opt-2-5' },
+    });
+
+    // Modal updates to ready
+    expect(await screen.findByText(/All 2 questions have been answered!/i)).toBeInTheDocument();
+    const readyConfirmBtn = screen.getByText('Confirm & Calculate Results');
+    expect(readyConfirmBtn).toBeEnabled();
+
+    // Confirm submission
+    fireEvent.click(readyConfirmBtn);
+    expect(await screen.findByText('Results Page Landed')).toBeInTheDocument();
+    expect(assessmentApi.submitAttempt).toHaveBeenCalledWith('att-123');
+  });
+
+  it('strictly blocks submission when answer saves have failed and requires successful retry', async () => {
     vi.mocked(assessmentApi.getAssessment).mockResolvedValueOnce({
       data: { id: 'asm-test', title: 'Exploration', version: 1, status: 'PUBLISHED' },
     });
@@ -470,8 +573,12 @@ describe('Assessment Runner (AssessmentTakePage)', () => {
       },
     });
 
-    // Question 2 save fails with network timeout
+    // Question 2 save first fails with network error
     vi.mocked(assessmentApi.saveAnswer).mockRejectedValueOnce(new Error('HTTP 503 Service Unavailable'));
+    // Retry resolves successfully
+    vi.mocked(assessmentApi.saveAnswer).mockResolvedValueOnce({
+      data: { id: 'ans-2', attemptId: 'att-123', questionId: 'q-2', selectedOptionId: 'opt-2-5', answeredAt: '2026-11-14T00:05:00Z' },
+    });
 
     render(
       <MemoryRouter initialEntries={['/assessments/asm-test/take']}>
@@ -512,5 +619,17 @@ describe('Assessment Runner (AssessmentTakePage)', () => {
     fireEvent.click(retryJumpBtn);
 
     expect(await screen.findByText('Question 2 of 2')).toBeInTheDocument();
+
+    // Click "Retry Save" on Question 2
+    const retrySaveBtn = screen.getByText('Retry Save');
+    fireEvent.click(retrySaveBtn);
+
+    // Now save succeeds
+    expect(await screen.findByText('✓ Saved')).toBeInTheDocument();
+
+    // Now open submit review modal again
+    fireEvent.click(screen.getByRole('button', { name: /Review & Finalize Assessment/i }));
+    expect(await screen.findByText(/All 2 questions have been answered!/i)).toBeInTheDocument();
+    expect(screen.getByText('Confirm & Calculate Results')).toBeEnabled();
   });
 });

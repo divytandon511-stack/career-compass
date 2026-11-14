@@ -20,8 +20,15 @@ export const AssessmentTakePage: React.FC = () => {
   const [answers, setAnswers] = useState<Record<string, string>>({}); // Selected option (UI)
   const [persistedAnswers, setPersistedAnswers] = useState<Record<string, string>>({}); // Confirmed saved to backend
   const [failedQuestions, setFailedQuestions] = useState<Record<string, string>>({}); // questionId -> error message
-  const [pendingSaves, setPendingSaves] = useState<Set<string>>(new Set()); // Set of questionIds with in-flight saves
+  const [pendingSaves, setPendingSaves] = useState<Set<string>>(new Set()); // Set of questionIds with in-flight/queued saves
+  const [inFlightCount, setInFlightCount] = useState<number>(0); // Total active network requests in flight
   const [isResumed, setIsResumed] = useState<boolean>(false);
+
+  // Queued serialization refs to guarantee sequential server-side write ordering per question
+  const targetOptionRef = React.useRef<Record<string, string>>({});
+  const persistedOptionRef = React.useRef<Record<string, string>>({});
+  const failedOptionRef = React.useRef<Record<string, string>>({});
+  const activeWorkersRef = React.useRef<Record<string, boolean>>({});
 
   // Status flags
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -111,6 +118,8 @@ export const AssessmentTakePage: React.FC = () => {
           });
           setAnswers(loadedAnswers);
           setPersistedAnswers(loadedAnswers);
+          targetOptionRef.current = { ...loadedAnswers };
+          persistedOptionRef.current = { ...loadedAnswers };
           setFailedQuestions({});
 
           // Find first unanswered question to jump to
@@ -133,18 +142,100 @@ export const AssessmentTakePage: React.FC = () => {
     }
   };
 
-  // Per-question request sequence tracker to eliminate out-of-order save race conditions
-  const saveSeqRef = React.useRef<Record<string, number>>({});
+  // Sequential queue worker per question to strictly guarantee server-side write ordering
+  const processQueueForQuestion = useCallback(
+    async (questionId: string) => {
+      if (!attemptId) return;
 
-  // Save answer to backend with race-condition safety and persistence guarantees
+      if (activeWorkersRef.current[questionId]) {
+        return; // Worker already running for this question; it will process the latest targetOptionRef
+      }
+
+      activeWorkersRef.current[questionId] = true;
+      setPendingSaves((prev) => new Set(prev).add(questionId));
+      setSaveStatus('saving');
+      setSaveErrorMessage(null);
+
+      try {
+        while (true) {
+          const optionToPersist = targetOptionRef.current[questionId];
+          if (!optionToPersist) break;
+
+          // If the server has already confirmed this option, we're done
+          if (persistedOptionRef.current[questionId] === optionToPersist) {
+            break;
+          }
+
+          setInFlightCount((c) => c + 1);
+          try {
+            await assessmentApi.saveAnswer(attemptId, questionId, optionToPersist);
+            // Confirmed persisted by server
+            persistedOptionRef.current[questionId] = optionToPersist;
+            setPersistedAnswers((prev) => ({ ...prev, [questionId]: optionToPersist }));
+            setFailedQuestions((prev) => {
+              if (!prev[questionId]) return prev;
+              const next = { ...prev };
+              delete next[questionId];
+              return next;
+            });
+          } catch (err: unknown) {
+            const message =
+              err instanceof Error ? err.message : 'Failed to save answer. Click to retry.';
+
+            // Only mark as failed if the target hasn't changed while this network request was running
+            if (targetOptionRef.current[questionId] === optionToPersist) {
+              failedOptionRef.current[questionId] = optionToPersist;
+              setFailedQuestions((prev) => ({ ...prev, [questionId]: message }));
+              // CRITICAL: Failed saves cannot silently count as successfully persisted!
+              setPersistedAnswers((prev) => {
+                if (!prev[questionId]) return prev;
+                const next = { ...prev };
+                delete next[questionId];
+                return next;
+              });
+              setSaveStatus('error');
+              setSaveErrorMessage(message);
+              break; // Stop loop on definitive failure for this target
+            }
+          } finally {
+            setInFlightCount((c) => Math.max(0, c - 1));
+          }
+        }
+      } finally {
+        activeWorkersRef.current[questionId] = false;
+
+        const currentTarget = targetOptionRef.current[questionId];
+        const isTargetFailed = failedOptionRef.current[questionId] === currentTarget;
+        const isTargetPersisted = persistedOptionRef.current[questionId] === currentTarget;
+
+        // If targetOption changed to an un-failed, un-persisted option while worker was running, re-trigger
+        if (currentTarget && !isTargetFailed && !isTargetPersisted) {
+          processQueueForQuestion(questionId);
+        } else {
+          setPendingSaves((prev) => {
+            const next = new Set(prev);
+            next.delete(questionId);
+            return next;
+          });
+          if (isTargetPersisted) {
+            setSaveStatus('saved');
+          }
+        }
+      }
+    },
+    [attemptId]
+  );
+
+  // Save answer to backend with serialized write guarantees
   const handleSelectOption = useCallback(
     async (questionId: string, optionId: string) => {
       if (!attemptId) return;
 
-      // Optimistically record the user's latest selection in UI
+      // 1. Optimistically record user's latest selection in UI
       setAnswers((prev) => ({ ...prev, [questionId]: optionId }));
 
-      // Clear any prior failure record for this question
+      // 2. Clear prior failure for this question
+      delete failedOptionRef.current[questionId];
       setFailedQuestions((prev) => {
         if (!prev[questionId]) return prev;
         const next = { ...prev };
@@ -152,52 +243,13 @@ export const AssessmentTakePage: React.FC = () => {
         return next;
       });
 
-      // Increment sequence counter to uniquely identify this specific request
-      const seq = (saveSeqRef.current[questionId] || 0) + 1;
-      saveSeqRef.current[questionId] = seq;
+      // 3. Set the latest desired option
+      targetOptionRef.current[questionId] = optionId;
 
-      // Track question as pending in-flight save
-      setPendingSaves((prev) => new Set(prev).add(questionId));
-      setSaveStatus('saving');
-      setSaveErrorMessage(null);
-
-      try {
-        await assessmentApi.saveAnswer(attemptId, questionId, optionId);
-
-        // Only commit if this response corresponds to the latest requested option for this question
-        if (saveSeqRef.current[questionId] === seq) {
-          setPersistedAnswers((prev) => ({ ...prev, [questionId]: optionId }));
-          setPendingSaves((prev) => {
-            const next = new Set(prev);
-            next.delete(questionId);
-            return next;
-          });
-          setSaveStatus('saved');
-        }
-      } catch (err: unknown) {
-        // Only record failure if this response corresponds to the latest requested option
-        if (saveSeqRef.current[questionId] === seq) {
-          const message =
-            err instanceof Error ? err.message : 'Failed to save answer. Click to retry.';
-          setFailedQuestions((prev) => ({ ...prev, [questionId]: message }));
-          // CRITICAL: Failed saves cannot silently count as successfully persisted!
-          setPersistedAnswers((prev) => {
-            if (!prev[questionId]) return prev;
-            const next = { ...prev };
-            delete next[questionId];
-            return next;
-          });
-          setPendingSaves((prev) => {
-            const next = new Set(prev);
-            next.delete(questionId);
-            return next;
-          });
-          setSaveStatus('error');
-          setSaveErrorMessage(message);
-        }
-      }
+      // 4. Trigger the sequential queue worker
+      processQueueForQuestion(questionId);
     },
-    [attemptId]
+    [attemptId, processQueueForQuestion]
   );
 
   // Final submission
@@ -284,7 +336,7 @@ export const AssessmentTakePage: React.FC = () => {
     .map((q, idx) => (failedQuestions[q.id] ? idx : null))
     .filter((idx): idx is number => idx !== null);
 
-  const isSavingAny = pendingSaves.size > 0;
+  const isSavingAny = inFlightCount > 0 || pendingSaves.size > 0;
   const answeredCount = Object.keys(persistedAnswers).length;
   const progressPercent = totalCount > 0 ? Math.round((answeredCount / totalCount) * 100) : 0;
 
