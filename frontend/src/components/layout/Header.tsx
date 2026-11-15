@@ -131,9 +131,22 @@ export const Header: React.FC = () => {
 
             {auth?.isAuthenticated ? (
               <div className="flex items-center gap-3">
-                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                  {displayName}
-                </span>
+                <Link
+                  to="/profile"
+                  style={{
+                    fontSize: '13px',
+                    color: 'var(--text-main)',
+                    fontWeight: 600,
+                    textDecoration: 'none',
+                    padding: '4px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--bg-surface)',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                  title="View Profile"
+                >
+                  👤 {displayName}
+                </Link>
                 <Button variant="secondary" size="sm" onClick={handleLogout}>
                   Log Out
                 </Button>
