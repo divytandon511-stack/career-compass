@@ -84,7 +84,7 @@ export const CareerExplorerPage: React.FC = () => {
   const refreshSavedCareers = useCallback(async () => {
     if (!isAuthenticated || !isStudent) return;
     try {
-      const res = await careersApi.getSavedCareers({ limit: 100 });
+      const res = await careersApi.getSavedCareers({ limit: 50 });
       const map = new Map<string, boolean>();
       (res.data || []).forEach((sc: SavedCareer) => map.set(sc.id, true));
       setSavedCareerMap(map);

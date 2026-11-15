@@ -78,9 +78,12 @@ describe('MargDarshak AI Guidance Flow', () => {
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
-  it('renders guidance home with safety commitment and previous sessions', async () => {
+  it('renders guidance home with safety commitment and previous sessions from nested response', async () => {
     vi.mocked(guidanceApi.listSessions).mockResolvedValue({
-      data: [mockSession],
+      data: {
+        data: [mockSession],
+        meta: { page: 1, limit: 20, total: 1, totalPages: 1 },
+      },
     });
     vi.mocked(assessmentApi.listAttempts).mockResolvedValue({
       data: [mockAttempt],
@@ -101,6 +104,85 @@ describe('MargDarshak AI Guidance Flow', () => {
     await waitFor(() => {
       expect(screen.getByText(/Open Chat/i)).toBeInTheDocument();
       expect(screen.getByText(/Focus Careers:/i)).toBeInTheDocument();
+      expect(screen.getByText('1')).toBeInTheDocument();
+      expect(screen.getByText(/careers grounded/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders clean empty state when listSessions returns empty nested sessions array', async () => {
+    vi.mocked(guidanceApi.listSessions).mockResolvedValue({
+      data: {
+        data: [],
+        meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
+      },
+    });
+    vi.mocked(assessmentApi.listAttempts).mockResolvedValue({
+      data: [mockAttempt],
+    });
+    vi.mocked(careersApi.listCareers).mockResolvedValue({
+      data: [mockCareer],
+    });
+
+    render(
+      <MemoryRouter>
+        <GuidancePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByText('No Guidance Conversations Yet')).toBeInTheDocument();
+      expect(screen.getByText('Start Your First Guidance Chat')).toBeInTheDocument();
+    });
+  });
+
+  it('safely handles malformed sessions response without crashing with map is not a function', async () => {
+    vi.mocked(guidanceApi.listSessions).mockResolvedValue({
+      data: {
+        data: null,
+      } as any,
+    });
+    vi.mocked(assessmentApi.listAttempts).mockResolvedValue({
+      data: [mockAttempt],
+    });
+    vi.mocked(careersApi.listCareers).mockResolvedValue({
+      data: [mockCareer],
+    });
+
+    render(
+      <MemoryRouter>
+        <GuidancePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByText('No Guidance Conversations Yet')).toBeInTheDocument();
+    });
+  });
+
+  it('safely handles unexpected non-array data object without calling .map on non-array', async () => {
+    vi.mocked(guidanceApi.listSessions).mockResolvedValue({
+      data: {
+        unrecognizedKey: 'unexpected non-array payload',
+      } as any,
+    });
+    vi.mocked(assessmentApi.listAttempts).mockResolvedValue({
+      data: [mockAttempt],
+    });
+    vi.mocked(careersApi.listCareers).mockResolvedValue({
+      data: [mockCareer],
+    });
+
+    render(
+      <MemoryRouter>
+        <GuidancePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByText('No Guidance Conversations Yet')).toBeInTheDocument();
     });
   });
 
@@ -236,7 +318,12 @@ describe('MargDarshak AI Guidance Flow', () => {
   });
 
   it('displays storage error inside modal when createSession fails', async () => {
-    vi.mocked(guidanceApi.listSessions).mockResolvedValue({ data: [] });
+    vi.mocked(guidanceApi.listSessions).mockResolvedValue({
+      data: {
+        data: [],
+        meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
+      },
+    });
     vi.mocked(assessmentApi.listAttempts).mockResolvedValue({ data: [mockAttempt] });
     vi.mocked(careersApi.listCareers).mockResolvedValue({ data: [mockCareer] });
     vi.mocked(guidanceApi.createSession).mockRejectedValue(new Error('MongoDB cluster unavailable'));

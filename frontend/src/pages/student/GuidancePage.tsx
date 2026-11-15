@@ -33,7 +33,12 @@ export const GuidancePage: React.FC = () => {
           // Gracefully degrade ONLY for confirmed optional chat-history storage failure (DB_UNAVAILABLE).
           // Generic 503, AI_UNAVAILABLE, or other server errors must NOT be swallowed and must show an actual error.
           if (code === 'DB_UNAVAILABLE' && (status === 503 || status === undefined)) {
-            return { data: [] };
+            return {
+              data: {
+                data: [] as GuidanceSession[],
+                meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
+              },
+            };
           }
           throw err;
         }),
@@ -41,7 +46,14 @@ export const GuidancePage: React.FC = () => {
         careersApi.listCareers({ limit: 50 }).catch(() => ({ data: [] })),
       ]);
 
-      setSessions(sessionsRes.data || []);
+      // Extract the actual sessions array from the nested response (sessionsRes.data.data) with safe array validation
+      const rawSessionsData = sessionsRes?.data;
+      const sessionList: GuidanceSession[] = Array.isArray(rawSessionsData?.data)
+        ? rawSessionsData.data
+        : Array.isArray(rawSessionsData)
+        ? (rawSessionsData as unknown as GuidanceSession[])
+        : [];
+      setSessions(sessionList);
       const completed = (attemptsRes.data || []).filter((a) => a.status === 'COMPLETED');
       setCompletedAttempts(completed);
       if (completed.length > 0) {
@@ -91,7 +103,7 @@ export const GuidancePage: React.FC = () => {
     if (!window.confirm('Are you sure you want to delete this guidance chat history?')) return;
     try {
       await guidanceApi.deleteSession(sessionId);
-      setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+      setSessions((prev) => (Array.isArray(prev) ? prev.filter((s) => s.sessionId !== sessionId) : []));
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to delete session');
     }
@@ -176,77 +188,86 @@ export const GuidancePage: React.FC = () => {
       )}
 
       {/* Sessions Content */}
-      {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-12)' }}>
-          <LoadingSpinner />
-        </div>
-      ) : sessions.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: 'var(--space-12)' }}>
-          <div style={{ fontSize: '36px', marginBottom: 'var(--space-2)' }}>💬</div>
-          <h3>No Guidance Conversations Yet</h3>
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: 'var(--space-2)', maxWidth: '480px', margin: 'var(--space-2) auto var(--space-6)' }}>
-            Start an interactive session with MargDarshak AI to explore how your interest profile matches secondary subject streams and careers.
-          </p>
-          <Button onClick={() => setShowCreateModal(true)}>
-            Start Your First Guidance Chat
-          </Button>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-          <h3 style={{ fontSize: '16px' }}>Your Guidance Conversations</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 'var(--space-4)' }}>
-            {sessions.map((session) => (
-              <div
-                key={session.sessionId}
-                className="card"
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'space-between',
-                  gap: 'var(--space-4)',
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-2)' }}>
-                    <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-pink)', textTransform: 'uppercase' }}>
-                      MargDarshak Session
-                    </span>
-                    <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-                      {formatDateTime(session.updatedAt || session.createdAt)}
-                    </span>
+      {(() => {
+        const safeSessions = Array.isArray(sessions) ? sessions : [];
+        if (loading) {
+          return (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-12)' }}>
+              <LoadingSpinner />
+            </div>
+          );
+        }
+        if (safeSessions.length === 0) {
+          return (
+            <div className="card" style={{ textAlign: 'center', padding: 'var(--space-12)' }}>
+              <div style={{ fontSize: '36px', marginBottom: 'var(--space-2)' }}>💬</div>
+              <h3>No Guidance Conversations Yet</h3>
+              <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: 'var(--space-2)', maxWidth: '480px', margin: 'var(--space-2) auto var(--space-6)' }}>
+                Start an interactive session with MargDarshak AI to explore how your interest profile matches secondary subject streams and careers.
+              </p>
+              <Button onClick={() => setShowCreateModal(true)}>
+                Start Your First Guidance Chat
+              </Button>
+            </div>
+          );
+        }
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+            <h3 style={{ fontSize: '16px' }}>Your Guidance Conversations</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 'var(--space-4)' }}>
+              {safeSessions.map((session) => (
+                <div
+                  key={session.sessionId}
+                  className="card"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    gap: 'var(--space-4)',
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-2)' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-pink)', textTransform: 'uppercase' }}>
+                        MargDarshak Session
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+                        {formatDateTime(session.updatedAt || session.createdAt)}
+                      </span>
+                    </div>
+                    <h4 style={{ margin: '0 0 var(--space-2) 0', fontSize: '15px' }}>
+                      Guidance Exploration
+                    </h4>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                      Session ID: <code style={{ fontSize: '11px' }}>{session.sessionId.slice(0, 8)}...</code>
+                    </p>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      Focus Careers: <strong>{session.careerIds?.length || 0}</strong> careers grounded
+                    </p>
                   </div>
-                  <h4 style={{ margin: '0 0 var(--space-2) 0', fontSize: '15px' }}>
-                    Guidance Exploration
-                  </h4>
-                  <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                    Session ID: <code style={{ fontSize: '11px' }}>{session.sessionId.slice(0, 8)}...</code>
-                  </p>
-                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    Focus Careers: <strong>{session.careerIds?.length || 0}</strong> careers grounded
-                  </p>
-                </div>
 
-                <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-                  <Button
-                    size="sm"
-                    onClick={() => navigate(`/guidance/${session.sessionId}`)}
-                    style={{ flex: 1 }}
-                  >
-                    Open Chat
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => handleDeleteSession(session.sessionId)}
-                  >
-                    Delete
-                  </Button>
+                  <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                    <Button
+                      size="sm"
+                      onClick={() => navigate(`/guidance/${session.sessionId}`)}
+                      style={{ flex: 1 }}
+                    >
+                      Open Chat
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      onClick={() => handleDeleteSession(session.sessionId)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* New Session Modal */}
       {showCreateModal && (
