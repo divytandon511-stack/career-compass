@@ -159,6 +159,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const code = (result.error as { code?: string })?.code;
         if (code === 'NETWORK_ERROR' || (status && status >= 500)) {
           setSessionError('Unable to connect to CareerCompass services. Please check your connection.');
+        } else if (status === 429) {
+          setSessionError('Too many authentication attempts. Please wait a moment before trying again.');
         } else {
           // Normal unauthenticated guest state
           setSessionError(null);
@@ -223,16 +225,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const refreshSession = async (): Promise<boolean> => {
     try {
-      const res = await authApi.refresh({ notifyOnFailure: true });
+      const res = await authApi.refresh({ notifyOnFailure: false });
       if (res.data?.accessToken) {
         applyToken(res.data.accessToken);
         await hydrateProfile();
         return true;
       }
-    } catch {
-      applyToken(null);
-      setUser(null);
-      setAuthUser(null);
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status;
+      if (status === 401 || status === 403) {
+        applyToken(null);
+        setUser(null);
+        setAuthUser(null);
+      }
     }
     return false;
   };

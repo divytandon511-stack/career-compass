@@ -27,7 +27,15 @@ export const GuidancePage: React.FC = () => {
       setLoading(true);
       setError(null);
       const [sessionsRes, attemptsRes, careersRes] = await Promise.all([
-        guidanceApi.listSessions(),
+        guidanceApi.listSessions().catch((err: unknown) => {
+          const status = (err as { status?: number })?.status;
+          const code = (err as { code?: string })?.code;
+          // Gracefully degrade only when optional chat history storage is unconfigured or unavailable (503)
+          if (status === 503 || code === 'DB_UNAVAILABLE' || code === 'AI_UNAVAILABLE') {
+            return { data: [] };
+          }
+          throw err;
+        }),
         assessmentApi.listAttempts().catch(() => ({ data: [] })),
         careersApi.listCareers({ limit: 50 }).catch(() => ({ data: [] })),
       ]);

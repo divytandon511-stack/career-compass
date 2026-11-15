@@ -148,4 +148,81 @@ describe('MargDarshak AI Guidance Flow', () => {
       ).toBeInTheDocument();
     });
   });
+
+  it('gracefully degrades to empty history without crashing when optional database is unconfigured (503)', async () => {
+    vi.mocked(guidanceApi.listSessions).mockRejectedValue({
+      status: 503,
+      code: 'DB_UNAVAILABLE',
+      message: 'Guidance history is unavailable',
+    });
+    vi.mocked(assessmentApi.listAttempts).mockResolvedValue({
+      data: [mockAttempt],
+    });
+    vi.mocked(careersApi.listCareers).mockResolvedValue({
+      data: [mockCareer],
+    });
+
+    render(
+      <MemoryRouter>
+        <GuidancePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      // Must NOT display a crashing red error banner for the whole page
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      // Must display clean empty state
+      expect(screen.getByText('No Guidance Conversations Yet')).toBeInTheDocument();
+    });
+  });
+
+  it('displays error banner when guidanceApi.listSessions encounters an unexpected non-503 server error', async () => {
+    vi.mocked(guidanceApi.listSessions).mockRejectedValue(new Error('Internal server failure (500)'));
+    vi.mocked(assessmentApi.listAttempts).mockResolvedValue({ data: [] });
+    vi.mocked(careersApi.listCareers).mockResolvedValue({ data: [] });
+
+    render(
+      <MemoryRouter>
+        <GuidancePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/Internal server failure/i)).toBeInTheDocument();
+    });
+  });
+
+  it('displays storage error inside modal when createSession fails', async () => {
+    vi.mocked(guidanceApi.listSessions).mockResolvedValue({ data: [] });
+    vi.mocked(assessmentApi.listAttempts).mockResolvedValue({ data: [mockAttempt] });
+    vi.mocked(careersApi.listCareers).mockResolvedValue({ data: [mockCareer] });
+    vi.mocked(guidanceApi.createSession).mockRejectedValue(new Error('MongoDB cluster unavailable'));
+
+    render(
+      <MemoryRouter>
+        <GuidancePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('+ Start New Guidance Chat')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('+ Start New Guidance Chat'));
+
+    // Check modal opened
+    expect(screen.getByRole('heading', { name: 'Start New Guidance Chat' })).toBeInTheDocument();
+
+    // Select the career checkbox
+    const careerCheckbox = screen.getByRole('checkbox');
+    fireEvent.click(careerCheckbox);
+
+    // Click Launch Chat
+    fireEvent.click(screen.getByRole('button', { name: /Launch Chat/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('MongoDB cluster unavailable')).toBeInTheDocument();
+    });
+  });
 });

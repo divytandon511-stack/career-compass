@@ -98,9 +98,7 @@ export async function executeTokenRefresh(options: RefreshOptions = {}): Promise
           'NETWORK_ERROR',
           0
         );
-        if (shouldNotifyOnFailure) {
-          notifyAuthFailure();
-        }
+        // Transient network drops must not revoke credentials or log out the student
         return null;
       }
 
@@ -116,7 +114,9 @@ export async function executeTokenRefresh(options: RefreshOptions = {}): Promise
         const code = errorData?.error?.code || (response.status === 401 ? 'UNAUTHORIZED' : 'HTTP_ERROR');
         lastRefreshError = new ApiError(message, code, response.status, errorData?.error?.details);
 
-        if (shouldNotifyOnFailure) {
+        // Only trigger global auth revocation on genuine authentication rejections (401/403).
+        // Transient rate limits (429) or upstream errors (5xx) must not clear user credentials.
+        if (shouldNotifyOnFailure && (response.status === 401 || response.status === 403)) {
           notifyAuthFailure();
         }
         return null;
@@ -130,9 +130,6 @@ export async function executeTokenRefresh(options: RefreshOptions = {}): Promise
       }
 
       lastRefreshError = new ApiError('Invalid refresh response payload', 'INVALID_RESPONSE', 500);
-      if (shouldNotifyOnFailure) {
-        notifyAuthFailure();
-      }
       return null;
     } finally {
       refreshPromise = null;
