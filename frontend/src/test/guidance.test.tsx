@@ -149,7 +149,7 @@ describe('MargDarshak AI Guidance Flow', () => {
     });
   });
 
-  it('gracefully degrades to empty history without crashing when optional database is unconfigured (503)', async () => {
+  it('gracefully degrades to empty history ONLY for confirmed optional chat-history storage failure (DB_UNAVAILABLE 503)', async () => {
     vi.mocked(guidanceApi.listSessions).mockRejectedValue({
       status: 503,
       code: 'DB_UNAVAILABLE',
@@ -173,6 +173,48 @@ describe('MargDarshak AI Guidance Flow', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       // Must display clean empty state
       expect(screen.getByText('No Guidance Conversations Yet')).toBeInTheDocument();
+    });
+  });
+
+  it('displays actual error banner when guidanceApi.listSessions fails with generic HTTP 503', async () => {
+    vi.mocked(guidanceApi.listSessions).mockRejectedValue({
+      status: 503,
+      code: 'SERVICE_UNAVAILABLE',
+      message: 'Upstream gateway temporarily unavailable (503)',
+    });
+    vi.mocked(assessmentApi.listAttempts).mockResolvedValue({ data: [] });
+    vi.mocked(careersApi.listCareers).mockResolvedValue({ data: [] });
+
+    render(
+      <MemoryRouter>
+        <GuidancePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/Upstream gateway temporarily unavailable/i)).toBeInTheDocument();
+    });
+  });
+
+  it('displays actual error banner when guidanceApi.listSessions fails with AI_UNAVAILABLE', async () => {
+    vi.mocked(guidanceApi.listSessions).mockRejectedValue({
+      status: 503,
+      code: 'AI_UNAVAILABLE',
+      message: 'AI guidance engine is unavailable',
+    });
+    vi.mocked(assessmentApi.listAttempts).mockResolvedValue({ data: [] });
+    vi.mocked(careersApi.listCareers).mockResolvedValue({ data: [] });
+
+    render(
+      <MemoryRouter>
+        <GuidancePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/AI guidance engine is unavailable/i)).toBeInTheDocument();
     });
   });
 

@@ -30,8 +30,9 @@ export const GuidancePage: React.FC = () => {
         guidanceApi.listSessions().catch((err: unknown) => {
           const status = (err as { status?: number })?.status;
           const code = (err as { code?: string })?.code;
-          // Gracefully degrade only when optional chat history storage is unconfigured or unavailable (503)
-          if (status === 503 || code === 'DB_UNAVAILABLE' || code === 'AI_UNAVAILABLE') {
+          // Gracefully degrade ONLY for confirmed optional chat-history storage failure (DB_UNAVAILABLE).
+          // Generic 503, AI_UNAVAILABLE, or other server errors must NOT be swallowed and must show an actual error.
+          if (code === 'DB_UNAVAILABLE' && (status === 503 || status === undefined)) {
             return { data: [] };
           }
           throw err;
@@ -48,7 +49,11 @@ export const GuidancePage: React.FC = () => {
       }
       setPublishedCareers(careersRes.data || []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load guidance sessions');
+      setError(
+        err instanceof Error
+          ? err.message
+          : (err as { message?: string })?.message || 'Failed to load guidance sessions'
+      );
     } finally {
       setLoading(false);
     }
