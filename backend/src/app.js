@@ -6,7 +6,15 @@ import rateLimit from 'express-rate-limit';
 import { env } from './config/env.js';
 import { createApiRouter } from './routes/index.js';
 import { createAuthRouter } from './routes/auth.routes.js';
+import { createAssessmentRouter } from './routes/assessment.routes.js';
+import { AssessmentService } from './services/assessment.service.js';
+import { CareerService } from './services/career.service.js';
+import { createCareerRouter } from './routes/career.routes.js';
+import { PlatformService } from './services/platform.service.js';
+import { createPlatformRouter } from './routes/platform.routes.js';
+import { createGuidanceRouter } from './routes/guidance.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
+import { createReadyRoutes } from './routes/ready.routes.js';
 import { notFoundHandler } from './middleware/not-found.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { cookieParserMiddleware } from './middleware/cookie-parser.js';
@@ -20,7 +28,16 @@ export const createApp = ({
   registerLimiter,
   loginLimiter,
   refreshLimiter,
+  apiLimiter,
   csrfProtection,
+  assessmentService,
+  assessmentRepository,
+  careerService,
+  careerRepository,
+  platformService,
+  platformRepository,
+  readinessCheck,
+  guidanceService,
 } = {}) => {
   const app = express();
 
@@ -51,15 +68,17 @@ export const createApp = ({
   app.use(cookieParserMiddleware);
 
   // 4. Global API Rate Limiting
-  const limiter = rateLimit({
-    windowMs: env.RATE_LIMIT_WINDOW_MS,
-    max: env.RATE_LIMIT_MAX,
-    standardHeaders: true,
-    legacyHeaders: false,
-    handler: (req, res, next) => {
-      next(new AppError('RATE_LIMIT_EXCEEDED', 'Too many requests, please try again later.', 429));
-    },
-  });
+  const limiter =
+    apiLimiter ||
+    rateLimit({
+      windowMs: env.RATE_LIMIT_WINDOW_MS,
+      max: env.RATE_LIMIT_MAX,
+      standardHeaders: true,
+      legacyHeaders: false,
+      handler: (req, res, next) => {
+        next(new AppError('RATE_LIMIT_EXCEEDED', 'Too many requests, please try again later.', 429));
+      },
+    });
   app.use(limiter);
 
   // 5. JSON Body Parsing with configurable size limit
@@ -80,12 +99,46 @@ export const createApp = ({
     });
   }
 
+  let assessmentRouter = null;
+  const resolvedAssessmentService =
+    assessmentService ||
+    (assessmentRepository ? new AssessmentService({ assessmentRepository }) : null);
+  if (resolvedAssessmentService) {
+    assessmentRouter = createAssessmentRouter({
+      assessmentService: resolvedAssessmentService,
+      authenticate,
+    });
+  }
+  let careerRouter = null;
+  const resolvedCareerService =
+    careerService || (careerRepository ? new CareerService({ careerRepository }) : null);
+  if (resolvedCareerService) {
+    careerRouter = createCareerRouter({ careerService: resolvedCareerService, authenticate });
+  }
+  const resolvedPlatformService =
+    platformService || (platformRepository ? new PlatformService({ repository: platformRepository }) : null);
+  const platformRouter =
+    resolvedPlatformService && typeof authenticate === 'function'
+      ? createPlatformRouter({ service: resolvedPlatformService, authenticate })
+      : null;
+  const guidanceRouter =
+    guidanceService && typeof authenticate === 'function'
+      ? createGuidanceRouter({ service: guidanceService, authenticate })
+      : null;
+
   // 7. API Routes mounted under /api/v1
-  const apiRouter = createApiRouter({ authRouter });
+  const apiRouter = createApiRouter({
+    authRouter,
+    assessmentRouter,
+    careerRouter,
+    platformRouter,
+    guidanceRouter,
+  });
   app.use('/api/v1', apiRouter);
 
   // Root /health alias aligned with docs/api-contract.md §9 and docs/architecture.md §9
   app.use('/health', healthRoutes);
+  app.use('/ready', createReadyRoutes({ check: readinessCheck }));
 
   // 8. Catch-all 404 Not Found Handler
   app.use(notFoundHandler);
