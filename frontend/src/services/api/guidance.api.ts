@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import { PaginationParams } from '@/types/api';
+import { PaginationParams, PaginationMeta } from '@/types/api';
 
 export interface GuidanceMessage {
   role: 'user' | 'assistant';
@@ -18,6 +18,13 @@ export interface GuidanceSession {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface PaginatedGuidanceSessions {
+  data: GuidanceSession[];
+  meta?: PaginationMeta;
+}
+
+export type GuidanceSessionListResponse = PaginatedGuidanceSessions;
 
 export interface SendMessageResponse {
   sessionId: string;
@@ -38,7 +45,7 @@ export const guidanceApi = {
     if (params.page) query.set('page', String(params.page));
     if (params.limit) query.set('limit', String(params.limit));
     const qs = query.toString() ? `?${query.toString()}` : '';
-    return apiClient<GuidanceSession[]>(`/guidance/sessions${qs}`);
+    return apiClient<PaginatedGuidanceSessions>(`/guidance/sessions${qs}`);
   },
 
   /**

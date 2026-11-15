@@ -178,18 +178,39 @@ export class PlatformRepository {
         orderBy: { [sort]: order },
         skip: (pagination.page - 1) * pagination.limit,
         take: pagination.limit,
+        include: { user: { select: { email: true } } },
       }),
       this.dbClient.counsellorProfile.count({ where }),
     ]);
-    return { data: profiles, meta: metadata({ ...pagination, total }) };
+    return {
+      data: profiles.map((p) => ({
+        id: p.userId,
+        userId: p.userId,
+        displayName: p.displayName,
+        bio: p.bio,
+        active: p.active,
+        email: p.user?.email || null,
+        createdAt: p.createdAt,
+      })),
+      meta: metadata({ ...pagination, total }),
+    };
   }
 
   async getCounsellor({ counsellorId }) {
     const profile = await this.dbClient.counsellorProfile.findFirst({
       where: { userId: counsellorId, active: true },
+      include: { user: { select: { email: true } } },
     });
     if (!profile) throw new AppError('NOT_FOUND', 'Counsellor not found', 404);
-    return profile;
+    return {
+      id: profile.userId,
+      userId: profile.userId,
+      displayName: profile.displayName,
+      bio: profile.bio,
+      active: profile.active,
+      email: profile.user?.email || null,
+      createdAt: profile.createdAt,
+    };
   }
 
   async listSlots({ counsellorId, from, to, own = false, page: pageNumber, limit } = {}) {
