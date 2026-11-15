@@ -1,0 +1,349 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String             @id @default(uuid()) @db.Uuid
+  email             String             @unique @db.VarChar(255)
+  passwordHash      String             @map("password_hash") @db.VarChar(255)
+  displayName       String             @map("display_name") @db.VarChar(100)
+  role              Role               @default(STUDENT)
+  status            UserStatus         @default(ACTIVE)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+  studentProfile    StudentProfile?
+  counsellorProfile CounsellorProfile?
+  refreshSessions   RefreshSession[]
+
+  @@map("users")
+}
+
+model StudentProfile {
+  userId          String   @id @map("user_id") @db.Uuid
+  schoolGrade     String?  @map("school_grade") @db.VarChar(10)
+  consentAccepted Boolean  @default(false) @map("consent_accepted")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assessmentAttempts AssessmentAttempt[]
+  savedCareers       SavedCareer[]
+  bookings           Booking[]
+
+  @@map("student_profiles")
+}
+
+model CounsellorProfile {
+  userId      String   @id @map("user_id") @db.Uuid
+  displayName String   @map("display_name") @db.VarChar(100)
+  bio         String?  @db.Text
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  availabilitySlots AvailabilitySlot[]
+  bookings          Booking[]
+
+  @@map("counsellor_profiles")
+}
+
+model RefreshSession {
+  id            String         @id @default(uuid()) @db.Uuid
+  userId        String         @map("user_id") @db.Uuid
+  hashedTokenId String         @unique @map("hashed_token_id") @db.VarChar(255)
+  expiresAt     DateTime       @map("expires_at") @db.Timestamptz
+  revokedAt     DateTime?      @map("revoked_at") @db.Timestamptz
+  revokedReason RevokedReason? @map("revoked_reason")
+  rotatedFrom   String?        @unique @map("rotated_from") @db.Uuid
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  predecessor RefreshSession? @relation("TokenRotation", fields: [rotatedFrom], references: [id], onDelete: Restrict)
+  successor   RefreshSession? @relation("TokenRotation")
+
+  @@index([userId])
+  @@map("refresh_sessions")
+}
+
+model Assessment {
+  id          String           @id @default(uuid()) @db.Uuid
+  title       String           @db.VarChar(200)
+  description String?          @db.Text
+  version     Int              @default(1)
+  status      AssessmentStatus @default(DRAFT)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  questions Question[]
+  attempts  AssessmentAttempt[]
+
+  @@index([status])
+  @@map("assessments")
+}
+
+model Question {
+  id           String    @id @default(uuid()) @db.Uuid
+  assessmentId String    @map("assessment_id") @db.Uuid
+  dimension    Dimension
+  prompt       String    @db.Text
+  position     Int
+  weight       Decimal   @default(1.0) @db.Decimal(5, 4)
+  options      Json      @db.JsonB
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  answers    Answer[]
+
+  @@unique([assessmentId, position])
+  @@map("questions")
+}
+
+model AssessmentAttempt {
+  id                String        @id @default(uuid()) @db.Uuid
+  studentId         String        @map("student_id") @db.Uuid
+  assessmentId      String        @map("assessment_id") @db.Uuid
+  assessmentVersion Int           @map("assessment_version")
+  status            AttemptStatus @default(IN_PROGRESS)
+  scoresJson        Json?         @map("scores_json") @db.JsonB
+  algorithmVersion  String?       @map("algorithm_version") @db.VarChar(50)
+  startedAt         DateTime      @default(now()) @map("started_at") @db.Timestamptz
+  completedAt       DateTime?     @map("completed_at") @db.Timestamptz
+
+  student         StudentProfile   @relation(fields: [studentId], references: [userId], onDelete: Cascade)
+  assessment      Assessment       @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  answers         Answer[]
+  recommendations Recommendation[]
+
+  @@index([studentId])
+  @@index([assessmentId])
+  @@index([status])
+  @@map("assessment_attempts")
+}
+
+model Answer {
+  id               String   @id @default(uuid()) @db.Uuid
+  attemptId        String   @map("attempt_id") @db.Uuid
+  questionId       String   @map("question_id") @db.Uuid
+  selectedOptionId String   @map("selected_option_id") @db.VarChar(36)
+  score            Int
+  answeredAt       DateTime @default(now()) @map("answered_at") @db.Timestamptz
+
+  attempt  AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question Question          @relation(fields: [questionId], references: [id], onDelete: Restrict)
+
+  @@unique([attemptId, questionId])
+  @@map("answers")
+}
+
+model Career {
+  id             String   @id @default(uuid()) @db.Uuid
+  slug           String   @unique @db.VarChar(120)
+  title          String   @db.VarChar(120)
+  description    String?  @db.Text
+  published      Boolean  @default(false)
+  profileVersion Int      @default(1) @map("profile_version")
+  sourceNote     String?  @map("source_note") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  dimensions      CareerDimension[]
+  careerSkills    CareerSkill[]
+  pathways        EducationPathway[]
+  recommendations Recommendation[]
+  savedCareers    SavedCareer[]
+
+  @@index([published])
+  @@map("careers")
+}
+
+model CareerDimension {
+  id           String    @id @default(uuid()) @db.Uuid
+  careerId     String    @map("career_id") @db.Uuid
+  dimension    Dimension
+  targetWeight Decimal   @map("target_weight") @db.Decimal(5, 4)
+
+  career Career @relation(fields: [careerId], references: [id], onDelete: Cascade)
+
+  @@unique([careerId, dimension])
+  @@map("career_dimensions")
+}
+
+model Skill {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  careerSkills CareerSkill[]
+
+  @@map("skills")
+}
+
+model CareerSkill {
+  careerId String @map("career_id") @db.Uuid
+  skillId  String @map("skill_id") @db.Uuid
+
+  career Career @relation(fields: [careerId], references: [id], onDelete: Cascade)
+  skill  Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([careerId, skillId])
+  @@map("career_skills")
+}
+
+model EducationPathway {
+  id            String    @id @default(uuid()) @db.Uuid
+  careerId      String    @map("career_id") @db.Uuid
+  stage         String    @db.VarChar(50)
+  qualification String    @db.VarChar(200)
+  notes         String?   @db.Text
+  verifiedAt    DateTime? @map("verified_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  career Career @relation(fields: [careerId], references: [id], onDelete: Cascade)
+
+  @@map("education_pathways")
+}
+
+enum Role {
+  STUDENT
+  COUNSELLOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum RevokedReason {
+  TOKEN_ROTATION
+  ROTATED
+  LOGOUT
+  ALL_DEVICES_LOGOUT
+  TOKEN_REUSE_DETECTED
+  REUSE_DETECTED
+  ACCOUNT_SUSPENDED
+  SECURITY_RESET
+  EXPIRED
+}
+
+enum AssessmentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum Dimension {
+  ANALYTICAL
+  CREATIVE
+  SOCIAL
+  PRACTICAL
+  ORGANIZATIONAL
+  INVESTIGATIVE
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+model Recommendation {
+  id               String   @id @default(uuid()) @db.Uuid
+  attemptId        String   @map("attempt_id") @db.Uuid
+  careerId         String   @map("career_id") @db.Uuid
+  rank             Int
+  similarityScore  Decimal  @map("similarity_score") @db.Decimal(7, 6)
+  explanationJson  Json?    @map("explanation_json") @db.JsonB
+  algorithmVersion String   @map("algorithm_version") @db.VarChar(50)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  attempt AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  career  Career            @relation(fields: [careerId], references: [id], onDelete: Restrict)
+
+  @@unique([attemptId, careerId])
+  @@map("recommendations")
+}
+
+model SavedCareer {
+  studentId String   @map("student_id") @db.Uuid
+  careerId  String   @map("career_id") @db.Uuid
+  savedAt   DateTime @default(now()) @map("saved_at") @db.Timestamptz
+
+  student StudentProfile @relation(fields: [studentId], references: [userId], onDelete: Cascade)
+  career  Career         @relation(fields: [careerId], references: [id], onDelete: Cascade)
+
+  @@id([studentId, careerId])
+  @@map("saved_careers")
+}
+
+model AvailabilitySlot {
+  id           String     @id @default(uuid()) @db.Uuid
+  counsellorId String     @map("counsellor_id") @db.Uuid
+  startsAt     DateTime   @map("starts_at") @db.Timestamptz
+  endsAt       DateTime   @map("ends_at") @db.Timestamptz
+  status       SlotStatus @default(AVAILABLE)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  counsellor CounsellorProfile @relation(fields: [counsellorId], references: [userId], onDelete: Cascade)
+  bookings   Booking[]
+
+  @@index([counsellorId, startsAt])
+  @@index([status])
+  @@map("availability_slots")
+}
+
+enum SlotStatus {
+  AVAILABLE
+  BOOKED
+  CANCELLED
+}
+
+model Booking {
+  id           String        @id @default(uuid()) @db.Uuid
+  studentId    String        @map("student_id") @db.Uuid
+  counsellorId String        @map("counsellor_id") @db.Uuid
+  slotId       String        @map("slot_id") @db.Uuid
+  status       BookingStatus @default(CONFIRMED)
+  note         String?       @db.VarChar(500)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  student    StudentProfile    @relation(fields: [studentId], references: [userId], onDelete: Cascade)
+  counsellor CounsellorProfile @relation(fields: [counsellorId], references: [userId], onDelete: Restrict)
+  slot       AvailabilitySlot  @relation(fields: [slotId], references: [id], onDelete: Restrict)
+
+  @@index([slotId])
+  @@index([studentId])
+  @@index([counsellorId])
+  @@map("bookings")
+}
+
+enum BookingStatus {
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+}
+
+model EmailOutbox {
+  id             String       @id @default(uuid()) @db.Uuid
+  eventType      String       @map("event_type") @db.VarChar(50)
+  payload        Json         @db.JsonB
+  status         OutboxStatus @default(PENDING)
+  attempts       Int          @default(0)
+  nextAttemptAt  DateTime?    @map("next_attempt_at") @db.Timestamptz
+  idempotencyKey String?      @unique @map("idempotency_key") @db.VarChar(36)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([status, nextAttemptAt])
+  @@map("email_outbox")
+}
+
+enum OutboxStatus {
+  PENDING
+  SENT
+  FAILED
+}

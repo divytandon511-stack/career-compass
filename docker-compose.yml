@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16.8-alpine
+    container_name: career-compass-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-career_compass_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-career_compass}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - career_compass_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-career_compass_dev} -d ${POSTGRES_DB:-career_compass}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  career_compass_pgdata:
+    name: career_compass_postgres_data
