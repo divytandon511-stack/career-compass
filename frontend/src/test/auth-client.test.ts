@@ -6,7 +6,9 @@ import {
   ApiError,
   addAuthFailureListener,
   getApiBaseUrl,
+  executeTokenRefresh,
 } from '@/services/api/client';
+import { authApi } from '@/services/api/auth.api';
 
 describe('apiClient & Token Refresh Subsystem', () => {
   beforeEach(() => {
@@ -181,5 +183,119 @@ describe('apiClient & Token Refresh Subsystem', () => {
     await expect(apiClient('/auth/refresh', { method: 'POST', _isRefreshRequest: true })).rejects.toThrow(ApiError);
     // Should NOT call fetch again recursively
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates concurrent authApi.refresh() calls into a single network request', async () => {
+    let refreshCount = 0;
+    global.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/auth/refresh')) {
+        refreshCount++;
+        await new Promise((r) => setTimeout(r, 20));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { accessToken: 'shared-refreshed-token', expiresIn: 900 } }),
+        };
+      }
+      return { ok: false, status: 400 };
+    });
+
+    // Invoke 3 concurrent authApi.refresh() calls
+    const [r1, r2, r3] = await Promise.all([
+      authApi.refresh(),
+      authApi.refresh(),
+      authApi.refresh(),
+    ]);
+
+    expect(refreshCount).toBe(1);
+    expect(r1.data.accessToken).toBe('shared-refreshed-token');
+    expect(r2.data.accessToken).toBe('shared-refreshed-token');
+    expect(r3.data.accessToken).toBe('shared-refreshed-token');
+    expect(getAuthToken()).toBe('shared-refreshed-token');
+  });
+
+  it('shares single-flight refreshPromise between authApi.refresh() and 401 interceptor', async () => {
+    setAuthToken('stale-jwt');
+    let refreshCount = 0;
+
+    global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('/auth/refresh')) {
+        refreshCount++;
+        await new Promise((r) => setTimeout(r, 25));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { accessToken: 'interceptor-shared-token', expiresIn: 900 } }),
+        };
+      }
+
+      const headers = (init?.headers as Record<string, string>) || {};
+      if (headers['Authorization'] === 'Bearer stale-jwt') {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { code: 'UNAUTHORIZED', message: 'Expired' } }),
+        };
+      }
+
+      if (headers['Authorization'] === 'Bearer interceptor-shared-token') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { success: true } }),
+        };
+      }
+
+      return { ok: false, status: 400 };
+    });
+
+    // Launch authApi.refresh() and an unauthenticated API call at the same time
+    const [apiRes, refreshRes] = await Promise.all([
+      apiClient('/some-protected-endpoint'),
+      authApi.refresh(),
+    ]);
+
+    expect(refreshCount).toBe(1);
+    expect(refreshRes.data.accessToken).toBe('interceptor-shared-token');
+    expect(apiRes.data).toEqual({ success: true });
+    expect(getAuthToken()).toBe('interceptor-shared-token');
+  });
+
+  it('does NOT notify auth failure when notifyOnFailure is false (passive session restoration)', async () => {
+    const failureSpy = vi.fn();
+    const unsubscribe = addAuthFailureListener(failureSpy);
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: { code: 'UNAUTHORIZED', message: 'No refresh token' } }),
+    });
+
+    const token = await executeTokenRefresh({ notifyOnFailure: false });
+
+    expect(token).toBeNull();
+    // Must NOT have notified auth failure listeners
+    expect(failureSpy).not.toHaveBeenCalled();
+
+    unsubscribe();
+  });
+
+  it('notifies auth failure when notifyOnFailure is true', async () => {
+    const failureSpy = vi.fn();
+    const unsubscribe = addAuthFailureListener(failureSpy);
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: { code: 'UNAUTHORIZED', message: 'Invalid refresh token' } }),
+    });
+
+    const token = await executeTokenRefresh({ notifyOnFailure: true });
+
+    expect(token).toBeNull();
+    // Must have notified auth failure listeners
+    expect(failureSpy).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
   });
 });

@@ -35,7 +35,15 @@ export const CAREER_CATALOG = Object.freeze([
       ORGANIZATIONAL: 0.40,
       SOCIAL: 0.25,
     },
-    skills: ['Software Architecture', 'System Design', 'Cloud Computing', 'Distributed Systems'],
+    skills: [
+      'Software Architecture',
+      'System Design',
+      'Cloud Computing',
+      'Distributed Systems',
+      'Python',
+      'Project Management',
+      'Process Optimization',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -74,7 +82,13 @@ export const CAREER_CATALOG = Object.freeze([
       CREATIVE: 0.40,
       SOCIAL: 0.30,
     },
-    skills: ['Machine Learning', 'Python', 'Statistical Modeling', 'Data Visualization'],
+    skills: [
+      'Machine Learning',
+      'Python',
+      'Statistical Modeling',
+      'Data Visualization',
+      'Data Analysis',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -113,7 +127,15 @@ export const CAREER_CATALOG = Object.freeze([
       ORGANIZATIONAL: 0.40,
       PRACTICAL: 0.30,
     },
-    skills: ['User Research', 'Usability Testing', 'Qualitative Analysis', 'Persona Mapping'],
+    skills: [
+      'User Research',
+      'Usability Testing',
+      'Qualitative Analysis',
+      'Persona Mapping',
+      'UI/UX Design',
+      'Data Analysis',
+      'Prototyping',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -152,7 +174,14 @@ export const CAREER_CATALOG = Object.freeze([
       INVESTIGATIVE: 0.45,
       ORGANIZATIONAL: 0.35,
     },
-    skills: ['UI/UX Design', 'Prototyping', 'Design Systems', 'Wireframing'],
+    skills: [
+      'UI/UX Design',
+      'Prototyping',
+      'Design Systems',
+      'Wireframing',
+      'User Research',
+      'Usability Testing',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -191,7 +220,13 @@ export const CAREER_CATALOG = Object.freeze([
       SOCIAL: 0.30,
       CREATIVE: 0.30,
     },
-    skills: ['Clinical Research', 'Molecular Biology', 'Laboratory Techniques', 'Data Analysis'],
+    skills: [
+      'Clinical Research',
+      'Molecular Biology',
+      'Laboratory Techniques',
+      'Data Analysis',
+      'Statistical Modeling',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -230,7 +265,14 @@ export const CAREER_CATALOG = Object.freeze([
       SOCIAL: 0.35,
       CREATIVE: 0.20,
     },
-    skills: ['Financial Modeling', 'Valuation', 'Equity Research', 'Excel Modeling'],
+    skills: [
+      'Financial Modeling',
+      'Valuation',
+      'Equity Research',
+      'Excel Modeling',
+      'Data Analysis',
+      'Statistical Modeling',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -269,7 +311,13 @@ export const CAREER_CATALOG = Object.freeze([
       ORGANIZATIONAL: 0.45,
       PRACTICAL: 0.30,
     },
-    skills: ['Psychotherapy', 'Psychological Assessment', 'Empathy', 'Case Formulation'],
+    skills: [
+      'Psychotherapy',
+      'Psychological Assessment',
+      'Empathy',
+      'Case Formulation',
+      'Qualitative Analysis',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -308,7 +356,14 @@ export const CAREER_CATALOG = Object.freeze([
       CREATIVE: 0.35,
       SOCIAL: 0.30,
     },
-    skills: ['Structural Analysis', 'AutoCAD', 'Project Management', 'Site Inspection'],
+    skills: [
+      'Structural Analysis',
+      'AutoCAD',
+      'Project Management',
+      'Site Inspection',
+      'Environmental Impact Assessment',
+      'Resource Allocation',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -347,7 +402,15 @@ export const CAREER_CATALOG = Object.freeze([
       INVESTIGATIVE: 0.40,
       CREATIVE: 0.25,
     },
-    skills: ['Supply Chain Management', 'Process Optimization', 'Operations Scheduling', 'Resource Allocation'],
+    skills: [
+      'Supply Chain Management',
+      'Process Optimization',
+      'Operations Scheduling',
+      'Resource Allocation',
+      'Project Management',
+      'Data Analysis',
+      'Excel Modeling',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -386,7 +449,14 @@ export const CAREER_CATALOG = Object.freeze([
       CREATIVE: 0.55,
       PRACTICAL: 0.40,
     },
-    skills: ['Pedagogical Design', 'Science Communication', 'Classroom Management', 'Curriculum Planning'],
+    skills: [
+      'Pedagogical Design',
+      'Science Communication',
+      'Classroom Management',
+      'Curriculum Planning',
+      'Empathy',
+      'Project Management',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -425,7 +495,15 @@ export const CAREER_CATALOG = Object.freeze([
       SOCIAL: 0.25,
       CREATIVE: 0.30,
     },
-    skills: ['Network Security', 'Incident Response', 'Penetration Testing', 'Threat Intelligence'],
+    skills: [
+      'Network Security',
+      'Incident Response',
+      'Penetration Testing',
+      'Threat Intelligence',
+      'Python',
+      'Cloud Computing',
+      'System Design',
+    ],
     pathways: [
       {
         stage: 'Secondary',
@@ -464,7 +542,14 @@ export const CAREER_CATALOG = Object.freeze([
       CREATIVE: 0.45,
       PRACTICAL: 0.40,
     },
-    skills: ['Environmental Impact Assessment', 'Policy Analysis', 'Stakeholder Engagement', 'Sustainability Strategy'],
+    skills: [
+      'Environmental Impact Assessment',
+      'Policy Analysis',
+      'Stakeholder Engagement',
+      'Sustainability Strategy',
+      'Data Analysis',
+      'Project Management',
+    ],
     pathways: [
       {
         stage: 'Secondary',

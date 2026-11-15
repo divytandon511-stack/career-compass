@@ -1,4 +1,11 @@
-import { apiClient, setAuthToken } from './client';
+import {
+  apiClient,
+  setAuthToken,
+  executeTokenRefresh,
+  getLastRefreshError,
+  ApiError,
+  RefreshOptions,
+} from './client';
 import { AuthUser } from '@/types/models';
 
 export interface LoginPayload {
@@ -49,16 +56,23 @@ export const authApi = {
 
   /**
    * Rotates refresh token from HttpOnly cookie and issues fresh access token.
+   * Delegates through the single-flight executeTokenRefresh mutex.
    * POST /api/v1/auth/refresh
    */
-  async refresh() {
-    const response = await apiClient<{ accessToken: string; expiresIn: number }>('/auth/refresh', {
-      method: 'POST',
-      requiresAuth: false,
-      _isRefreshRequest: true,
-    });
-    setAuthToken(response.data.accessToken);
-    return response;
+  async refresh(options?: RefreshOptions) {
+    const token = await executeTokenRefresh(options);
+    if (!token) {
+      throw (
+        getLastRefreshError() ||
+        new ApiError('Failed to refresh authentication session', 'UNAUTHORIZED', 401)
+      );
+    }
+    return {
+      data: {
+        accessToken: token,
+        expiresIn: 900,
+      },
+    };
   },
 
   /**
