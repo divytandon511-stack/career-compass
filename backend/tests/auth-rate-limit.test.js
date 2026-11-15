@@ -73,5 +73,34 @@ describe('Auth Rate Limiter Configuration & Invariants', () => {
     const refreshLimit = parseLimit('RATE_LIMIT_REFRESH_MAX', process.env.NODE_ENV === 'development' ? 200 : 30);
     expect(refreshLimit).toBe(60);
   });
+
+  it('enforces HTTP 429 with standard AppError envelope when max threshold is exceeded', async () => {
+    const express = (await import('express')).default;
+    const request = (await import('supertest')).default;
+    const app = express();
+
+    app.post(
+      '/test-rate-limit',
+      createAuthLimiter({ windowMs: 60000, max: 2, message: 'Too many rate-limit test requests' }),
+      (req, res) => res.status(200).json({ ok: true })
+    );
+
+    app.use((err, req, res, next) => {
+      res.status(err.statusCode || 500).json({
+        error: { code: err.code, message: err.message },
+      });
+    });
+
+    const res1 = await request(app).post('/test-rate-limit');
+    expect(res1.status).toBe(200);
+
+    const res2 = await request(app).post('/test-rate-limit');
+    expect(res2.status).toBe(200);
+
+    const res3 = await request(app).post('/test-rate-limit');
+    expect(res3.status).toBe(429);
+    expect(res3.body.error.code).toBe('RATE_LIMIT_EXCEEDED');
+    expect(res3.body.error.message).toBe('Too many rate-limit test requests');
+  });
 });
 
