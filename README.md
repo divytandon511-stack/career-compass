@@ -150,7 +150,7 @@ cp .env.example .env
 # Apply database migrations
 npx prisma migrate dev
 
-# Seed career catalog, question bank, and demo accounts
+# Seed assessment question bank and career catalog
 npm run seed
 
 # Start development server
