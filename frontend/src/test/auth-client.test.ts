@@ -298,4 +298,46 @@ describe('apiClient & Token Refresh Subsystem', () => {
 
     unsubscribe();
   });
+
+  it('does NOT notify auth failure when refresh fails with 429 Too Many Requests or 5xx server errors', async () => {
+    const failureSpy = vi.fn();
+    const unsubscribe = addAuthFailureListener(failureSpy);
+
+    // Mock 429 Too Many Requests
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({ error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests' } }),
+    });
+
+    const token429 = await executeTokenRefresh({ notifyOnFailure: true });
+    expect(token429).toBeNull();
+    expect(failureSpy).not.toHaveBeenCalled();
+
+    // Mock 500 Internal Server Error
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: { code: 'INTERNAL_ERROR', message: 'Server error' } }),
+    });
+
+    const token500 = await executeTokenRefresh({ notifyOnFailure: true });
+    expect(token500).toBeNull();
+    expect(failureSpy).not.toHaveBeenCalled();
+
+    unsubscribe();
+  });
+
+  it('does NOT notify auth failure on transient network errors during refresh', async () => {
+    const failureSpy = vi.fn();
+    const unsubscribe = addAuthFailureListener(failureSpy);
+
+    global.fetch = vi.fn().mockRejectedValue(new Error('Failed to fetch'));
+
+    const token = await executeTokenRefresh({ notifyOnFailure: true });
+    expect(token).toBeNull();
+    expect(failureSpy).not.toHaveBeenCalled();
+
+    unsubscribe();
+  });
 });

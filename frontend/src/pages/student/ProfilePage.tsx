@@ -55,16 +55,20 @@ export const ProfilePage: React.FC = () => {
       setSaving(true);
       setError(null);
       setSuccessMessage(null);
-      const res = await userApi.updateProfile({
-        displayName: displayName.trim(),
-        schoolGrade: schoolGrade.trim() || undefined,
-      });
-      setProfile(res.data);
-      setSuccessMessage('Profile updated successfully!');
-      // Update in auth context if method exists
-      if (auth?.refreshSession) {
-        await auth.refreshSession();
+      if (auth?.updateProfile) {
+        const updated = await auth.updateProfile({
+          displayName: displayName.trim(),
+          schoolGrade: schoolGrade.trim() || undefined,
+        });
+        setProfile(updated);
+      } else {
+        const res = await userApi.updateProfile({
+          displayName: displayName.trim(),
+          schoolGrade: schoolGrade.trim() || undefined,
+        });
+        setProfile(res.data);
       }
+      setSuccessMessage('Profile updated successfully!');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update profile');
     } finally {

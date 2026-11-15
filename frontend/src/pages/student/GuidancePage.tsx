@@ -27,7 +27,16 @@ export const GuidancePage: React.FC = () => {
       setLoading(true);
       setError(null);
       const [sessionsRes, attemptsRes, careersRes] = await Promise.all([
-        guidanceApi.listSessions(),
+        guidanceApi.listSessions().catch((err: unknown) => {
+          const status = (err as { status?: number })?.status;
+          const code = (err as { code?: string })?.code;
+          // Gracefully degrade ONLY for confirmed optional chat-history storage failure (DB_UNAVAILABLE).
+          // Generic 503, AI_UNAVAILABLE, or other server errors must NOT be swallowed and must show an actual error.
+          if (code === 'DB_UNAVAILABLE' && (status === 503 || status === undefined)) {
+            return { data: [] };
+          }
+          throw err;
+        }),
         assessmentApi.listAttempts().catch(() => ({ data: [] })),
         careersApi.listCareers({ limit: 50 }).catch(() => ({ data: [] })),
       ]);
@@ -40,7 +49,11 @@ export const GuidancePage: React.FC = () => {
       }
       setPublishedCareers(careersRes.data || []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load guidance sessions');
+      setError(
+        err instanceof Error
+          ? err.message
+          : (err as { message?: string })?.message || 'Failed to load guidance sessions'
+      );
     } finally {
       setLoading(false);
     }
