@@ -92,6 +92,14 @@ export class AssessmentService {
       ...parsedQuery,
     });
   }
+
+  backfillRecommendations({ user, attemptId }) {
+    const { id } = parse(attemptIdSchema, { id: attemptId });
+    return this.assessmentRepository.backfillAttemptRecommendations({
+      studentId: user?.role === 'STUDENT' ? user.id : undefined,
+      attemptId: id,
+    });
+  }
 }
 
 export const createAssessmentService = (dependencies) => new AssessmentService(dependencies);

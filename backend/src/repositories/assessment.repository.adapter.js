@@ -437,6 +437,102 @@ export class AssessmentRepositoryAdapter {
     }
   }
 
+  async backfillAttemptRecommendations({ attemptId, studentId } = {}) {
+    assertDelegate(this.dbClient, 'recommendation');
+    assertDelegate(this.dbClient, 'assessmentAttempt');
+    assertDelegate(this.dbClient, 'career');
+
+    if (typeof this.dbClient.$transaction !== 'function') {
+      const error = new Error('Database transaction capability ($transaction) is required');
+      error.code = 'TRANSACTION_UNAVAILABLE';
+      throw error;
+    }
+
+    try {
+      return await this.dbClient.$transaction(async (tx) => {
+        const attempt = await tx.assessmentAttempt.findUnique({
+          where: { id: attemptId },
+        });
+
+        if (!attempt) {
+          throw new AppError('NOT_FOUND', 'Assessment attempt not found', 404);
+        }
+        if (studentId && attempt.studentId !== studentId) {
+          throw new AppError('NOT_FOUND', 'Assessment attempt not found', 404);
+        }
+        if (attempt.status !== 'COMPLETED') {
+          throw new AppError('CONFLICT', 'Assessment attempt is not completed', 409);
+        }
+        if (!attempt.scoresJson || typeof attempt.scoresJson !== 'object') {
+          throw new AppError(
+            'CONFLICT',
+            'Assessment attempt has no valid scores to generate recommendations',
+            409
+          );
+        }
+
+        const existingCount = await tx.recommendation.count({
+          where: { attemptId },
+        });
+
+        if (existingCount > 0) {
+          return {
+            backfilled: false,
+            attemptId,
+            count: existingCount,
+            message: 'Recommendations already exist for this attempt',
+          };
+        }
+
+        const careers = await tx.career.findMany({
+          where: { published: true },
+          include: { dimensions: true },
+        });
+
+        if (careers.length === 0) {
+          return {
+            backfilled: false,
+            attemptId,
+            count: 0,
+            message: 'No published careers available for recommendation',
+          };
+        }
+
+        const ranked = rankCareers(attempt.scoresJson, careers);
+        if (ranked.length > 0) {
+          await tx.recommendation.createMany({
+            data: ranked.map((item) => ({
+              attemptId,
+              careerId: item.career.id,
+              rank: item.rank,
+              similarityScore: item.similarityScore,
+              algorithmVersion: item.algorithmVersion,
+              explanationJson: {
+                reasons: item.reasons,
+                cautions: item.cautions,
+                careerProfileVersion: item.careerProfileVersion,
+                dimensionSnapshot: item.dimensionSnapshot,
+                algorithmWeights: item.algorithmWeights,
+                dimensionContributions: item.dimensionContributions,
+                isLowInformation: item.isLowInformation,
+              },
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        return {
+          backfilled: true,
+          attemptId,
+          count: ranked.length,
+        };
+      });
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      mapDatabaseError(error, 'backfillAttemptRecommendations');
+    }
+  }
+
   async listRecommendations({ attemptId, studentId, page, limit } = {}) {
     assertDelegate(this.dbClient, 'recommendation');
     assertDelegate(this.dbClient, 'assessmentAttempt');
@@ -450,16 +546,22 @@ export class AssessmentRepositoryAdapter {
         throw new AppError('CONFLICT', 'Assessment attempt is not completed', 409);
       }
       const where = { attemptId };
-      const [items, total] = await Promise.all([
-        this.dbClient.recommendation.findMany({
-          where,
-          orderBy: { rank: 'asc' },
-          skip: (pagination.page - 1) * pagination.limit,
-          take: pagination.limit,
-          include: { career: true },
-        }),
-        this.dbClient.recommendation.count({ where }),
-      ]);
+      let total = await this.dbClient.recommendation.count({ where });
+
+      // Safe, explicit, non-recursive backfill: if completed attempt has 0 recommendations
+      // (e.g. submitted during unseeded catalog), backfill using existing scoresJson
+      if (total === 0 && attempt.scoresJson) {
+        await this.backfillAttemptRecommendations({ attemptId, studentId });
+        total = await this.dbClient.recommendation.count({ where });
+      }
+
+      const items = await this.dbClient.recommendation.findMany({
+        where,
+        orderBy: { rank: 'asc' },
+        skip: (pagination.page - 1) * pagination.limit,
+        take: pagination.limit,
+        include: { career: true },
+      });
       return {
         data: items.map((item) => ({
           career: {
