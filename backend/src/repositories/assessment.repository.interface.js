@@ -34,5 +34,9 @@ export class AssessmentRepositoryInterface {
   async listRecommendations() {
     throw new Error('AssessmentRepositoryInterface.listRecommendations must be implemented');
   }
+
+  async backfillAttemptRecommendations() {
+    throw new Error('AssessmentRepositoryInterface.backfillAttemptRecommendations must be implemented');
+  }
 }
 

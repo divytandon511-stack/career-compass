@@ -25,6 +25,8 @@ import {
   DEFAULT_ASSESSMENT,
   ASSESSMENT_QUESTIONS,
 } from './seed-data/assessment-questions.js';
+import { seedCareerCatalog, CAREER_CATALOG } from './seed-data/career-catalog.js';
+import { rankCareers } from '../src/matching/index.js';
 
 // Load environment variables (.env) if present
 dotenv.config();
@@ -285,6 +287,95 @@ export async function seedAssessment(
 }
 
 /**
+ * Backfills recommendations for completed assessment attempts that have 0 recommendations.
+ * Uses the attempt's existing scoresJson and the published career catalog.
+ * Completely idempotent: does not duplicate or overwrite existing recommendations.
+ *
+ * @param {import('@prisma/client').PrismaClient} prismaClient
+ * @param {object} [options={}]
+ * @param {string} [options.targetAttemptId] - Optional attempt ID to target specifically
+ * @returns {Promise<{ attemptsExamined: number, attemptsBackfilled: number, totalRecommendationsCreated: number }>}
+ */
+export async function backfillCompletedAttemptsRecommendations(
+  prismaClient,
+  { targetAttemptId } = {}
+) {
+  if (!prismaClient || typeof prismaClient.$transaction !== 'function') {
+    throw new Error(
+      'backfillCompletedAttemptsRecommendations requires an authoritative PrismaClient instance'
+    );
+  }
+
+  const where = {
+    status: 'COMPLETED',
+    ...(targetAttemptId ? { id: targetAttemptId } : {}),
+  };
+
+  const completedAttempts = await prismaClient.assessmentAttempt.findMany({
+    where,
+    include: {
+      _count: { select: { recommendations: true } },
+    },
+  });
+
+  const publishedCareers = await prismaClient.career.findMany({
+    where: { published: true },
+    include: { dimensions: true },
+  });
+
+  if (publishedCareers.length === 0) {
+    return {
+      attemptsExamined: completedAttempts.length,
+      attemptsBackfilled: 0,
+      totalRecommendationsCreated: 0,
+    };
+  }
+
+  let attemptsBackfilled = 0;
+  let totalRecommendationsCreated = 0;
+
+  for (const attempt of completedAttempts) {
+    // Only backfill if recommendations are completely missing and scoresJson exists
+    if (
+      attempt._count.recommendations === 0 &&
+      attempt.scoresJson &&
+      typeof attempt.scoresJson === 'object'
+    ) {
+      const ranked = rankCareers(attempt.scoresJson, publishedCareers);
+      if (ranked.length > 0) {
+        await prismaClient.recommendation.createMany({
+          data: ranked.map((item) => ({
+            attemptId: attempt.id,
+            careerId: item.career.id,
+            rank: item.rank,
+            similarityScore: item.similarityScore,
+            algorithmVersion: item.algorithmVersion,
+            explanationJson: {
+              reasons: item.reasons,
+              cautions: item.cautions,
+              careerProfileVersion: item.careerProfileVersion,
+              dimensionSnapshot: item.dimensionSnapshot,
+              algorithmWeights: item.algorithmWeights,
+              dimensionContributions: item.dimensionContributions,
+              isLowInformation: item.isLowInformation,
+            },
+          })),
+          skipDuplicates: true,
+        });
+        attemptsBackfilled++;
+        totalRecommendationsCreated += ranked.length;
+      }
+    }
+  }
+
+  return {
+    attemptsExamined: completedAttempts.length,
+    attemptsBackfilled,
+    totalRecommendationsCreated,
+  };
+}
+
+/**
  * CLI execution entry point.
  */
 async function runSeed() {
@@ -303,6 +394,24 @@ async function runSeed() {
     } else {
       console.log(
         `[Seed] Updated draft assessment "${result.assessment.title}" (v${result.assessment.version}) with ${result.questionCount} questions.`
+      );
+    }
+
+    console.log('[Seed] Seeding CareerCompass career catalogue...');
+    const catalogResult = await seedCareerCatalog(prisma);
+    console.log(
+      `[Seed] Verified career catalogue: ${catalogResult.careerCount} published careers with 6 dimensions, ${catalogResult.skillsCount} skills, and pathways.`
+    );
+
+    console.log('[Seed] Checking for completed attempts requiring recommendation backfill...');
+    const backfillResult = await backfillCompletedAttemptsRecommendations(prisma);
+    if (backfillResult.attemptsBackfilled > 0) {
+      console.log(
+        `[Seed] Backfilled ${backfillResult.totalRecommendationsCreated} recommendations across ${backfillResult.attemptsBackfilled} completed attempt(s).`
+      );
+    } else {
+      console.log(
+        `[Seed] All ${backfillResult.attemptsExamined} completed attempt(s) have up-to-date recommendations.`
       );
     }
   } catch (err) {
@@ -324,4 +433,5 @@ if (isDirectExecution) {
   });
 }
 
+export { seedCareerCatalog, CAREER_CATALOG };
 export default seedAssessment;
