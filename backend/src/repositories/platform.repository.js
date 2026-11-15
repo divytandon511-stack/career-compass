@@ -282,10 +282,11 @@ export class PlatformRepository {
       ...(role === 'STUDENT' ? { studentId: userId } : { counsellorId: userId }),
       ...(status ? { status } : {}),
     };
+    const orderBy = sort === 'startsAt' ? { slot: { startsAt: order } } : { [sort]: order };
     const [bookings, total] = await Promise.all([
       this.dbClient.booking.findMany({
         where,
-        orderBy: { [sort]: order },
+        orderBy,
         skip: (pagination.page - 1) * pagination.limit,
         take: pagination.limit,
         include: { slot: true },

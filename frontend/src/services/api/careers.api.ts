@@ -7,7 +7,10 @@ export const careersApi = {
    * Public directory listing with keyword search and skill filter.
    * GET /api/v1/careers
    */
-  async listCareers(params: PaginationParams & { q?: string; skillId?: string } = {}) {
+  async listCareers(
+    params: PaginationParams & { q?: string; skillId?: string; signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal } = {}
+  ) {
     const query = new URLSearchParams();
     if (params.page) query.set('page', String(params.page));
     if (params.limit) query.set('limit', String(params.limit));
@@ -16,8 +19,13 @@ export const careersApi = {
     if (params.sort) query.set('sort', params.sort);
     if (params.order) query.set('order', params.order);
 
+    const abortSignal = params.signal || options.signal;
+
     const queryString = query.toString() ? `?${query.toString()}` : '';
-    return apiClient<Career[]>(`/careers${queryString}`, { requiresAuth: false });
+    return apiClient<Career[]>(`/careers${queryString}`, {
+      requiresAuth: false,
+      signal: abortSignal,
+    });
   },
 
   /**
