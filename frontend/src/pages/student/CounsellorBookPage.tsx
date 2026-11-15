@@ -19,7 +19,11 @@ export const CounsellorBookPage: React.FC = () => {
   const [bookingSuccess, setBookingSuccess] = useState(false);
 
   useEffect(() => {
-    if (!id) return;
+    if (!id || id === 'undefined') {
+      setError('Please select a valid counsellor from the directory.');
+      setLoading(false);
+      return;
+    }
     let isMounted = true;
 
     async function loadData() {
@@ -180,7 +184,14 @@ export const CounsellorBookPage: React.FC = () => {
           </div>
           <div>
             <h3 style={{ margin: 0 }}>{counsellor.displayName}</h3>
-            <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{counsellor.email}</span>
+            {counsellor.email && (
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{counsellor.email}</span>
+            )}
+            {((counsellor as unknown as { bio?: string }).bio || (counsellor.profile as { bio?: string })?.bio) && (
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                {(counsellor as unknown as { bio?: string }).bio || (counsellor.profile as { bio?: string })?.bio}
+              </p>
+            )}
             <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-1)' }}>
               <span
                 style={{

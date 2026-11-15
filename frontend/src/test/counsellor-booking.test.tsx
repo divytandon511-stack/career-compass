@@ -138,6 +138,50 @@ describe('Student Counsellor Discovery and Booking Flow', () => {
     });
   });
 
+  it('renders counsellor list when counsellor has userId instead of id', async () => {
+    const rawCounsellorProfile = {
+      userId: '9f47fb1b-2c0d-439b-aded-d7e86561d78b',
+      displayName: 'Dr. Priya Desai',
+      bio: 'Certified Career Counsellor.',
+      active: true,
+    } as unknown as UserProfile;
+
+    vi.mocked(bookingApi.listCounsellors).mockResolvedValue({
+      data: [rawCounsellorProfile],
+    });
+
+    render(
+      <MemoryRouter>
+        <CounsellorsPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Dr. Priya Desai')).toBeInTheDocument();
+      expect(screen.getByText('Certified Career Counsellor.')).toBeInTheDocument();
+      const bookButton = screen.getByRole('button', { name: /View Available Slots & Book/i });
+      expect(bookButton).toBeInTheDocument();
+      expect(bookButton).not.toBeDisabled();
+    });
+  });
+
+  it('displays graceful error on CounsellorBookPage when id is undefined', async () => {
+    render(
+      <MemoryRouter initialEntries={['/counsellors/undefined/book']}>
+        <Routes>
+          <Route path="/counsellors/:id/book" element={<CounsellorBookPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Please select a valid counsellor from the directory.')
+      ).toBeInTheDocument();
+      expect(bookingApi.getCounsellor).not.toHaveBeenCalled();
+    });
+  });
+
   it('lists student appointments and allows cancelling confirmed booking', async () => {
     vi.mocked(bookingApi.getMyBookings).mockResolvedValue({
       data: [mockBooking],
