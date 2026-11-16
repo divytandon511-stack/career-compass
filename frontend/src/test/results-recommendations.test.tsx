@@ -140,11 +140,66 @@ describe('Results & Recommendations (ResultsPage & RecommendationsPage)', () => 
       );
 
       expect(await screen.findByText('Career Recommendations')).toBeInTheDocument();
+      // Record 1 verification
       expect(screen.getByText('Data Scientist')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Data Scientist' })).toHaveAttribute('href', '/careers/data-scientist');
       expect(screen.getByText('Rank #1')).toBeInTheDocument();
       expect(screen.getByText('94% Vector Alignment')).toBeInTheDocument();
+      expect(screen.getByText('Cosine: 0.940')).toBeInTheDocument();
       expect(screen.getByText('High Analytical and Investigative dimension alignment.')).toBeInTheDocument();
       expect(screen.getByText('Demands extensive statistical and machine learning training.')).toBeInTheDocument();
+
+      // Record 2 verification
+      expect(screen.getByText('Software Architect')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Software Architect' })).toHaveAttribute('href', '/careers/software-architect');
+      expect(screen.getByText('Rank #2')).toBeInTheDocument();
+      expect(screen.getByText('88% Vector Alignment')).toBeInTheDocument();
+      expect(screen.getByText('Cosine: 0.880')).toBeInTheDocument();
+      expect(screen.getByText('Strong Organizational and Analytical compatibility.')).toBeInTheDocument();
+    });
+
+    it('renders empty state when attempt returns zero recommendation records', async () => {
+      vi.mocked(assessmentApi.getRecommendations).mockResolvedValueOnce({
+        data: [],
+        meta: { page: 1, limit: 10, total: 0, totalPages: 0 },
+      });
+      vi.mocked(careersApi.getSavedCareers).mockResolvedValueOnce({
+        data: [],
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/attempts/att-completed-123/recommendations']}>
+          <Routes>
+            <Route path="/attempts/:id/recommendations" element={<RecommendationsPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      expect(await screen.findByText('No Career Matches Generated')).toBeInTheDocument();
+      expect(screen.getByText(/We couldn't generate career recommendations for this attempt/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Retake Assessment' })).toBeInTheDocument();
+    });
+
+    it('renders error state with retry option when recommendations API call fails', async () => {
+      vi.mocked(assessmentApi.getRecommendations).mockRejectedValueOnce(
+        new Error('Failed to fetch recommendations from server')
+      );
+      vi.mocked(careersApi.getSavedCareers).mockResolvedValueOnce({
+        data: [],
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/attempts/att-completed-123/recommendations']}>
+          <Routes>
+            <Route path="/attempts/:id/recommendations" element={<RecommendationsPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      expect(await screen.findByText('Unable to Load Recommendations')).toBeInTheDocument();
+      expect(screen.getByText('Failed to fetch recommendations from server')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Back to Assessments' })).toBeInTheDocument();
     });
 
     it('optimistically saves and unsaves a recommended career', async () => {

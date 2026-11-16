@@ -1,187 +1,206 @@
 # CareerCompass
 
-> **Problem Statement:** Develop Effective Career Counselling and Guidance Programs in Schools to Enhance Student Career Choices.
+> Secondary school career guidance and stream planning platform aligned with the NEP 2020 framework.
 
-**CareerCompass** is an integrated, school-oriented career guidance platform designed for secondary and higher secondary school students (Grades 9–12) in India. The system aligns with the National Education Policy (NEP 2020) framework to help students understand their interest profiles, explore verified educational pathways, and connect with school counsellors for personalized guidance.
-
----
-
-## 1. Project Overview & Core Philosophy
-
-Choosing an academic stream and career path in secondary school is often clouded by peer pressure, parental expectations, and fragmented, commercially driven advice. CareerCompass provides an accessible, transparent, and structured alternative through:
-
-1. **Self-Reported Interest Profiling:** A 30-question exploratory assessment measuring 6 product-defined interest dimensions (`ANALYTICAL`, `CREATIVE`, `SOCIAL`, `PRACTICAL`, `ORGANIZATIONAL`, `INVESTIGATIVE`).
-2. **Transparent, Deterministic Recommendations:** A mathematical weighted cosine-similarity engine matching student interest vectors against human-curated career vectors. Recommendations are deterministic, explainable, and never presented as psychometric certification or placement guarantees.
-3. **Verified Career Pathways:** Educational roadmaps (secondary school requirements, undergraduate/postgraduate degrees, entrance examinations such as JEE, NEET, CUET, CLAT) curated and verified from official government and educational sources.
-4. **Conflict-Free Counsellor Booking:** An appointment scheduling system with database-enforced concurrency control to eliminate double-booking while preserving full cancellation and audit history.
-5. **AI Guidance Assistant (MargDarshak AI):** An explanatory conversational companion that contextualizes recommendations using verified catalogue data and student dimension scores. **MargDarshak AI never calculates, modifies, or overrides mathematical recommendation scores.**
-6. **Privacy-Preserving School Analytics:** Administrative dashboards with $k$-anonymity suppression ($k \ge 5$) providing aggregate interest trends without exposing individual student records.
+CareerCompass empowers secondary and higher secondary school students (Grades 9–12) to make transparent, interest-aligned educational choices. By replacing fragmented, high-pressure advice with self-reported interest profiling, deterministic vector recommendations, structured educational pathways, concurrency-controlled counsellor scheduling, and AI-assisted conversational guidance, CareerCompass bridges the gap between classroom interests and real-world career trajectories.
 
 ---
 
-## 2. Target Users & Capabilities
+## Overview
 
-| User Role | Target Audience | Core Platform Capabilities |
-|---|---|---|
-| `STUDENT` | Secondary & higher secondary students (Grades 9–12) | Take interest assessment, view radar chart profile, explore ranked career matches, bookmark careers, converse with MargDarshak AI, book counsellor appointments. |
-| `COUNSELLOR` | School counsellors & designated academic advisors | Publish availability slots, manage upcoming appointments, review student interest context (with consent), mark sessions completed or cancelled. |
-| `ADMIN` | School principals, guidance coordinators | Manage career catalogue and question bank, monitor user accounts, view aggregate school interest trends and slot utilization with privacy suppression. |
+Secondary school students face critical educational milestones when selecting subject streams in Grade 11 and navigating entrance examinations for higher education. CareerCompass provides an integrated, transparent digital platform designed for secondary schools:
 
----
-
-## 3. Planned Technology Stack
-
-| Layer | Technology | Architectural Role |
-|---|---|---|
-| **Frontend Client** | React 18, Vite, React Router 6 | Responsive, accessible web application (WCAG 2.1 AA), canvas-driven radar charts, in-memory token state. Zero direct database connections. |
-| **Backend API** | Node.js, Express | Versioned RESTful API (`/api/v1`), Zod validation, layered architecture (route → middleware → controller → service → repository). |
-| **Relational Database** | PostgreSQL 15+ | **Authoritative source of truth** for users, credentials, career catalogue, assessment definitions, finalized scores, availability slots, bookings, and email outbox. |
-| **Relational ORM** | Prisma ORM | Type-safe database queries, declarative migrations, and reproducible synthetic seed scripts. |
-| **Document Database** | MongoDB 6+ & Mongoose | **Supplementary append-only storage** for bounded AI guidance conversation histories and diagnostic assessment event logs. |
-| **Recommendation Engine** | Custom Mathematical Service | Deterministic weighted cosine-similarity vector matching executed in PostgreSQL/backend service layer. |
-| **Authentication** | Argon2id / bcrypt, JWT | Short-lived access JWTs in memory, rotated refresh tokens in `HttpOnly`/`Secure` cookies, token family revocation. |
-| **AI Integration** | External LLM Provider (via backend proxy) | Grounded natural language explanations; sandboxed prompt pipeline with complete PII redaction and non-blocking failure degradation. |
-| **Notifications** | Transactional Email Adapter | Asynchronous outbox worker pattern with retries and idempotency keys. |
+- **For Students:** Discover personal interest dimensions across analytical, creative, social, practical, organizational, and investigative disciplines; explore curated career pathways; converse with an AI guidance advisor; and schedule one-on-one sessions with school counsellors.
+- **For Counsellors:** Manage availability slots, review student assessment profiles with student consent, prevent scheduling conflicts, and track student guidance sessions.
+- **For Administrators:** Monitor aggregate school-wide interest distributions across dimensions, maintain the curated career catalog, and manage institutional counsellor accounts.
 
 ---
 
-## 4. Team Ownership & Responsibilities
+## Key Features
 
-CareerCompass is developed by a three-member capstone engineering team:
+### 1. Student Interest Assessment
+- **30-Question Exploratory Instrument:** Seeded questionnaire measuring self-reported student affinity across 6 canonical interest dimensions (`ANALYTICAL`, `CREATIVE`, `SOCIAL`, `PRACTICAL`, `ORGANIZATIONAL`, `INVESTIGATIVE`) with 5 questions per dimension.
+- **Interactive Visual Feedback:** Visualizes dimensional scores on an interactive, canvas-driven 6-axis Radar Chart with clear score breakdowns.
+- **Progress Preservation & Resumption:** Individual answers are saved to the database as they are submitted, allowing authenticated students to resume active in-progress assessment attempts across sessions.
 
-| Team Member | Capstone Focus & Role | Primary Responsibilities |
-|---|---|---|
-| **Divy Tandon** | Applied Mathematics & Backend Architecture (Lead) | System architecture, versioned REST API contract, authentication lifecycle & RBAC, mathematical recommendation algorithm (weighted cosine similarity), backend security, analytics endpoints, automated test suites. |
-| **Dhavika Bika** | ISD & Frontend Architecture (Lead) | React/Vite client architecture, UI/UX specification & design system tokens, accessible student/counsellor/admin user journeys, interactive assessment runner, radar chart visualization, MargDarshak AI guidance interface. |
-| **Aradhya Tiwari** | Data Engineering & Entrepreneurship (Lead) | PostgreSQL relational data modeling & DDL, Prisma ORM schema & migrations, MongoDB document models & aggregations, curated career catalogue & educational pathways, booking concurrency architecture, business case & feasibility analysis. |
+### 2. Deterministic Career Matching Engine
+- **Mathematical Vector Alignment:** Computes career rankings using weighted cosine similarity between student dimension scores and curated career profile vectors.
+- **Transparent & Non-Certified:** Recommendations explain exact dimension alignments and explicitly avoid high-stakes certification or placement guarantees.
+
+### 3. Career Explorer & Educational Roadmaps
+- **Curated Career Catalog:** Browse curated careers with transversal skill tags, industry overviews, and salary insights.
+- **Structured Educational Roadmaps:** Step-by-step blueprints covering Grade 11–12 stream combinations, undergraduate/postgraduate degrees, and national entrance exams (e.g., JEE, NEET, CUET, CLAT).
+- **Bookmarking & Saved Careers:** Save target careers to track personal exploration directly from the student dashboard.
+
+### 4. MargDarshak AI Guidance Companion
+- **Contextually Grounded Guidance:** Explains educational pathways and secondary subject streams grounded in the student's assessment scores and the curated career catalog.
+- **Prompt Isolation:** Uses structured XML delimiters (`<verified_context>`, `<student_query>`) to separate trusted backend context from untrusted user input, accompanied by uncertainty disclaimers.
+- **Graceful Fault Tolerance:** Built on an OpenAI-compatible interface with non-blocking graceful degradation if external LLM providers or MongoDB history storage are unavailable.
+
+### 5. Concurrency-Safe Counsellor Booking
+- **Atomic Concurrency Control:** Prevents double-booking via atomic conditional status updates (`UPDATE ... WHERE status = 'AVAILABLE'`) executed within interactive database transactions.
+- **Student & Counsellor Management:** Students can book and cancel sessions; counsellors publish recurring availability slots and manage upcoming appointments.
+
+### 6. Student Dashboard & School Analytics
+- **Personal Student Hub:** Tracks assessment history, top recommendations, bookmarked careers, and upcoming counsellor appointments.
+- **Admin Analytics:** Aggregates school-wide interest distributions across canonical dimensions, completed assessment counts, and booking statistics without exposing individual student assessment answer histories.
 
 ---
 
-## 5. Repository Structure
+## Technology Stack
+
+### Frontend Client
+- **Framework & Build:** React 18, Vite 5, TypeScript 5
+- **Routing:** React Router 6 (`react-router-dom`)
+- **State & Networking:** Context API, Custom Hooks, Native Fetch wrapper with automated JWT silent refresh interceptors
+- **Visualizations & UI:** HTML5 Canvas (Radar Chart), Modern CSS Custom Properties (Design System tokens), accessible focus states
+- **Testing:** Vitest, React Testing Library, JSDOM
+
+### Backend API
+- **Runtime & Server:** Node.js (>=22.12.0), Express 4
+- **Architecture:** Layered RESTful API (`/api/v1`) with Zod request validation
+- **Authentication & Security:** Argon2id password hashing, JWT authentication (short-lived access tokens and rotated refresh tokens in `HttpOnly`/`SameSite` cookies), Helmet, CORS, and Express Rate Limit
+- **Testing:** Vitest, Supertest
+
+### Databases & Storage
+- **Primary Relational Database:** PostgreSQL 16 (Authoritative store for users, profiles, assessments, recommendations, slots, and bookings)
+- **ORM & Migrations:** Prisma ORM 6 (Type-safe client, declarative migrations, and reproducible seeds)
+- **Document Store (Supplementary):** MongoDB 6+ & Mongoose 8 (Append-only storage for bounded MargDarshak AI conversation transcripts)
+
+---
+
+## Project Structure
 
 ```text
 career-compass/
-├── .gitignore                      # Git ignore rules for Node, Vite, env files, caches
-├── README.md                       # Master project overview, architecture, and roadmap
-├── backend/                        # Backend application source code (implementation pending)
-│   └── .gitkeep
-├── database/                       # Database DDL, migration scripts, and seed data (pending)
-│   └── .gitkeep
-├── frontend/                       # Frontend React/Vite application source code (pending)
-│   └── .gitkeep
-└── docs/                           # Authoritative system documentation & specifications
-    ├── architecture.md             # System architecture, layered design, tech decisions
-    ├── api-contract.md             # REST API specification (/api/v1), payloads, error codes
-    ├── ui-specification.md         # Frontend UI/UX design, user journeys, design system
-    ├── ai-guidance-design.md       # MargDarshak AI architecture, prompt grounding, safety
-    ├── data-model.md               # PostgreSQL schema, Prisma models, MongoDB collections
-    ├── er-diagram.md               # Mermaid ER diagrams, cardinalities, concurrency design
-    ├── business-case.md            # Problem validation, feasibility, sustainability, metrics
-    ├── business-plan.md            # Data Engineering & Entrepreneurship domain scope
-    └── isd-plan.md                 # ISD & Frontend domain scope
+├── backend/
+│   ├── prisma/
+│   │   ├── migrations/            # Declarative PostgreSQL migrations
+│   │   ├── seed-data/             # Curated career catalog & question bank
+│   │   └── schema.prisma          # Prisma schema definition
+│   ├── src/
+│   │   ├── assessment/            # Assessment scoring and dimension math
+│   │   ├── config/                # Environment configuration and validation
+│   │   ├── controllers/           # HTTP request handlers
+│   │   ├── integrations/          # External LLM provider client (MargDarshak AI)
+│   │   ├── matching/              # Weighted cosine similarity matching engine
+│   │   ├── middleware/            # Auth, RBAC, error handling, and rate limiting
+│   │   ├── repositories/          # Prisma and MongoDB data access layers
+│   │   ├── routes/                # Versioned REST API route definitions (/api/v1)
+│   │   ├── services/              # Business logic and coordination layer
+│   │   └── server.js              # HTTP server entrypoint
+│   └── tests/                     # Backend automated unit and integration tests
+├── frontend/
+│   ├── src/
+│   │   ├── app/                   # Root application shell and route configuration
+│   │   ├── components/            # Reusable UI components (Shared, Auth, Student, Layout)
+│   │   ├── context/               # Global state (Authentication, Theme)
+│   │   ├── hooks/                 # Reusable React hooks
+│   │   ├── pages/                 # Route views (Auth, Student, Counsellor, Admin)
+│   │   ├── services/api/          # Strongly-typed API client services
+│   │   ├── styles/                # CSS design tokens and base styles
+│   │   └── test/                  # Frontend test suites (Component, Integration, Routing)
+│   ├── index.html                 # Single-Page Application HTML entrypoint
+│   └── vite.config.ts             # Vite build and test configuration
+├── docs/                          # Detailed architecture, API, and system specifications
+└── docker-compose.yml             # Local PostgreSQL container service
 ```
 
 ---
 
-## 6. System Documentation Index
+## Getting Started
 
-System documentation and architectural specifications have been reviewed and reconciled in the `docs/` directory, subject to the unresolved mentor and team decisions detailed in §10:
-
-- [System Architecture](docs/architecture.md) — Architectural principles, layered module boundaries, security model, and rubric traceability.
-- [REST API Contract](docs/api-contract.md) — Endpoint specifications for `/api/v1`, request/response envelopes, error semantics, and status codes.
-- [UI/UX Specification](docs/ui-specification.md) — Complete user journeys, component hierarchy, design system tokens, WCAG 2.1 AA accessibility, and ISD rubric mapping.
-- [AI Guidance System Design](docs/ai-guidance-design.md) — MargDarshak AI prompt sandboxing, strict catalog grounding, PII redaction, and dual-database resilience.
-- [Data Model Specification](docs/data-model.md) — PostgreSQL table definitions, Prisma ORM models, partial unique indexes, MongoDB schemas, and sample queries.
-- [Entity-Relationship Diagram](docs/er-diagram.md) — Mermaid ER diagrams, table cardinalities, and booking concurrency mechanics.
-- [Business Case & Feasibility](docs/business-case.md) — Stakeholder analysis, implementation feasibility, operational metrics, and ethical boundaries.
-- [Business & Data Plan](docs/business-plan.md) — Entrepreneurship and data engineering domain responsibilities.
-- [ISD & Frontend Plan](docs/isd-plan.md) — Interface system design and frontend application responsibilities.
-
----
-
-## 7. Current Project Status
-
-- **Status:** **Documentation and System Integration Review Completed (Design Stage).**
-- **Application Code Status:** Implementation has **not yet started**. Directories `frontend/`, `backend/`, and `database/` currently contain `.gitkeep` placeholders.
-- **Integrity Note:** No mock application code, artificial test runs, or fabricated deployment URLs are included. Specifications have been reviewed and cross-reconciled, but remain subject to unresolved mentor and team decisions (see §10) before code implementation begins.
-
----
-
-## 8. High-Level Development Roadmap
-
-```text
-Phase 1: Architecture & Integration Review (Completed)
- └── Reconcile cross-document contracts (API, Data Model, UI, AI design, Concurrency).
-
-Phase 2: Database Layer & Data Seeding
- ├── Initialize Prisma schema and generate initial PostgreSQL migrations.
- ├── Seed database with 10–15 curated MVP career profiles, pathways, and 30-question assessment bank.
- └── Set up Mongoose connection for supplementary MongoDB collections.
-
-Phase 3: Core Backend API Implementation
- ├── Implement Express application shell with security middleware (Helmet, CORS, rate-limiting).
- ├── Auth module: Argon2id hashing, JWT access/refresh token rotation, RBAC guards.
- ├── Assessment & Mathematical Recommendation module: Weighted cosine-similarity scoring.
- ├── Booking module: Concurrency-safe slot reservation with partial unique index protection.
- └── Analytics module: Aggregate reporting with k-anonymity suppression (k >= 5).
-
-Phase 4: Frontend Application Development
- ├── Initialize React 18 + Vite project structure, routing, and design system tokens.
- ├── Build accessible questionnaire runner with local state caching.
- ├── Implement Canvas-based 6-axis Radar Chart for dimension profiles.
- ├── Develop Career Explorer directory, filters, and detailed educational pathway blueprints.
- └── Build Counsellor scheduling and booking management interfaces.
-
-Phase 5: MargDarshak AI Integration
- ├── Implement sandboxed backend LLM proxy with PII redaction and context delimiters.
- ├── Integrate MongoDB guidance session persistence and bounded history management.
- └── Implement graceful UI degradation on AI provider timeouts or outages.
-
-Phase 6: Verification, Testing & Capstone Review
- ├── Execute automated unit and integration tests (scoring, auth, booking races).
- ├── Conduct end-to-end user journey audits against college evaluation rubrics.
- └── Prepare final demonstration with synthetic datasets.
-```
-
----
-
-## 9. Prerequisites & Verification
-
-The following tools and runtime environments are planned for local development:
-
-- **Node.js:** v18.x or v20.x LTS
+### Prerequisites
+- **Node.js:** `>=22.12.0` (matching `backend/package.json` engine requirements)
 - **Package Manager:** `npm` (v9+)
-- **Relational Database:** PostgreSQL 15+
-- **Document Database:** MongoDB 6+
-- **Version Control:** Git
+- **Docker & Docker Compose:** For running the local PostgreSQL container
+- **MongoDB (Optional):** Local or cloud MongoDB instance for MargDarshak AI session history (the application automatically degrades gracefully if omitted)
 
-### Existing Repository Verification
-
-To inspect the documentation and verify the current repository state:
-
+### 1. Clone the Repository
 ```bash
-# Clone the repository
 git clone https://github.com/divytandon511-stack/career-compass.git
 cd career-compass
-
-# Verify the working branch
-git branch --show-current
-# Expected output: main
-
-# Inspect documentation files
-ls -la docs/
 ```
 
-*(Note: Application build commands such as `npm install` or `npm run dev` will be configured during Phase 2 and Phase 3 once project manifests `package.json` are initialized).*
+### 2. Start PostgreSQL Container
+
+The root `docker-compose.yml` binds PostgreSQL to `localhost:5433` by default (local environment overrides may adjust the host port mapping). It requires `POSTGRES_PASSWORD` to be set in your environment before starting the container:
+
+```bash
+# Set your chosen local PostgreSQL password in your shell session
+export POSTGRES_PASSWORD=your_secure_dev_password
+
+# Start PostgreSQL 16 container in the background (default port 5433)
+docker compose up -d
+```
+*Note: Ensure the password and host port match the credentials configured in `DATABASE_URL` in `backend/.env`.*
+
+### 3. Setup and Run the Backend
+
+```bash
+cd backend
+
+# Install dependencies
+npm install
+
+# Configure environment variables
+cp .env.example .env
+# Edit .env to set your JWT_SECRET and match your DATABASE_URL credentials
+
+# Apply database migrations
+npx prisma migrate dev
+
+# Seed assessment question bank and career catalog
+npm run seed
+
+# Start development server
+npm run dev
+```
+The backend API will be available at `http://localhost:4000/api/v1`.
+
+### 4. Setup and Run the Frontend
+
+Open a new terminal window at the repository root:
+
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Configure environment variables
+cp .env.example .env
+# Default VITE_API_URL is http://localhost:4000/api/v1
+
+# Start Vite development server
+npm run dev
+```
+The frontend application will be accessible at `http://localhost:5173`.
+
+### 5. Running Tests
+
+Both backend and frontend contain comprehensive automated test suites. The commands below can be run sequentially from the project root:
+
+```bash
+# Run backend tests (434 tests)
+(cd backend && npm test)
+
+# Run frontend tests (97 tests)
+(cd frontend && npm test)
+
+# Run frontend TypeScript typecheck
+(cd frontend && npm run typecheck)
+
+# Build frontend for production
+(cd frontend && npm run build)
+```
 
 ---
 
-## 10. Known Unresolved Decisions (Pending Team/Mentor Approval)
+## Team
 
-The following design decisions are documented across the architectural specifications and require formal team or academic mentor confirmation prior to implementation:
+CareerCompass was designed and developed by:
 
-1. **Multi-School Tenancy Scope:** Whether the MVP is constrained to a single school/demo cohort or requires multi-tenant `schoolId` scoping across all database tables and queries.
-2. **Student Age & Guardian Consent:** Clarification on school data governance policies regarding parental/guardian consent workflows for minors under 18 years of age.
-3. **College ISD Delivery Track:** Confirmation from the college mentor on whether a responsive React web client fully satisfies the integrated ISD component, or if a separate offline deliverable is required.
-4. **Third-Party Service Providers:** Selection and budget allocation for the external LLM provider (e.g., OpenAI, Google Gemini) and transactional email service.
-5. **Slot Cancellation Cutoff Policy:** Confirmation on whether a time-based cutoff policy (e.g., cancellation allowed up to 2 hours before the slot) is required for the MVP, or if immediate cancellation remains active for demo simplicity.
+- **Divy Tandon** — Applied Mathematics & Backend Architecture Lead
+- **Dhavika Bika** — ISD & Frontend Architecture Lead
+- **Aradhya Tiwari** — Data Engineering & Entrepreneurship Lead

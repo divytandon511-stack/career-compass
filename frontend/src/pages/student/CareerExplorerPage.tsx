@@ -22,11 +22,16 @@ export const CareerExplorerPage: React.FC = () => {
   const initialOrder = (searchParams.get('order') as 'asc' | 'desc') || 'asc';
   const initialPage = parseInt(searchParams.get('page') || '1', 10);
 
-  const [query, setQuery] = useState<string>(initialQ);
+  // Raw search input (snappy immediate keystroke response)
+  const [searchInput, setSearchInput] = useState<string>(initialQ);
+  // Debounced search query (throttled to avoid rapid network flooding)
+  const [debouncedQuery, setDebouncedQuery] = useState<string>(initialQ);
+
   const [selectedSkill, setSelectedSkill] = useState<string>(initialSkill);
   const [sortField, setSortField] = useState<'title' | 'createdAt'>(initialSort);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(initialOrder);
   const [page, setPage] = useState<number>(initialPage);
+  const [retryTrigger, setRetryTrigger] = useState<number>(0);
 
   // Data state
   const [careers, setCareers] = useState<Career[]>([]);
@@ -38,6 +43,23 @@ export const CareerExplorerPage: React.FC = () => {
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const isStudent = (user?.role || authUser?.role) === 'STUDENT';
+
+  // Debounce search input by 300ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery((prev) => {
+        if (prev !== searchInput) {
+          setPage(1);
+          return searchInput;
+        }
+        return prev;
+      });
+    }, 300);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [searchInput]);
 
   // Load skills for filter dropdown on mount
   useEffect(() => {
@@ -62,7 +84,7 @@ export const CareerExplorerPage: React.FC = () => {
   const refreshSavedCareers = useCallback(async () => {
     if (!isAuthenticated || !isStudent) return;
     try {
-      const res = await careersApi.getSavedCareers({ limit: 100 });
+      const res = await careersApi.getSavedCareers({ limit: 50 });
       const map = new Map<string, boolean>();
       (res.data || []).forEach((sc: SavedCareer) => map.set(sc.id, true));
       setSavedCareerMap(map);
@@ -75,9 +97,11 @@ export const CareerExplorerPage: React.FC = () => {
     refreshSavedCareers();
   }, [refreshSavedCareers]);
 
-  // Main career listing fetch
+  // Main career listing fetch with AbortController cancellation and resilient retry trigger
   useEffect(() => {
     let isMounted = true;
+    const abortController = new AbortController();
+
     async function fetchCareers() {
       setIsLoading(true);
       setError(null);
@@ -85,10 +109,11 @@ export const CareerExplorerPage: React.FC = () => {
         const res = await careersApi.listCareers({
           page,
           limit: 12,
-          q: query.trim() || undefined,
+          q: debouncedQuery.trim() || undefined,
           skillId: selectedSkill || undefined,
           sort: sortField,
           order: sortOrder,
+          signal: abortController.signal,
         });
 
         if (!isMounted) return;
@@ -96,6 +121,10 @@ export const CareerExplorerPage: React.FC = () => {
         if (res.meta) setMeta(res.meta);
       } catch (err: unknown) {
         if (!isMounted) return;
+        if (err instanceof Error && err.name === 'AbortError') {
+          // Request was deliberately cancelled due to user input change; ignore cleanly
+          return;
+        }
         setError(
           err instanceof Error ? err.message : 'Unable to load careers directory.'
         );
@@ -107,19 +136,20 @@ export const CareerExplorerPage: React.FC = () => {
     fetchCareers();
     return () => {
       isMounted = false;
+      abortController.abort();
     };
-  }, [query, selectedSkill, sortField, sortOrder, page]);
+  }, [debouncedQuery, selectedSkill, sortField, sortOrder, page, retryTrigger]);
 
   // Sync state to URL search params
   useEffect(() => {
     const params = new URLSearchParams();
-    if (query) params.set('q', query);
+    if (debouncedQuery) params.set('q', debouncedQuery);
     if (selectedSkill) params.set('skillId', selectedSkill);
     if (sortField !== 'title') params.set('sort', sortField);
     if (sortOrder !== 'asc') params.set('order', sortOrder);
     if (page > 1) params.set('page', String(page));
     setSearchParams(params, { replace: true });
-  }, [query, selectedSkill, sortField, sortOrder, page, setSearchParams]);
+  }, [debouncedQuery, selectedSkill, sortField, sortOrder, page, setSearchParams]);
 
   // Handle Save/Unsave Bookmark
   const handleToggleSave = async (careerId: string) => {
@@ -160,11 +190,18 @@ export const CareerExplorerPage: React.FC = () => {
   };
 
   const handleClearFilters = () => {
-    setQuery('');
+    setSearchInput('');
+    setDebouncedQuery('');
     setSelectedSkill('');
     setSortField('title');
     setSortOrder('asc');
     setPage(1);
+  };
+
+  const handleRetry = () => {
+    setError(null);
+    setIsLoading(true);
+    setRetryTrigger((prev) => prev + 1);
   };
 
   return (
@@ -210,10 +247,9 @@ export const CareerExplorerPage: React.FC = () => {
           <InputField
             label="Search Keywords"
             placeholder="Search by title or description..."
-            value={query}
+            value={searchInput}
             onChange={(e) => {
-              setQuery(e.target.value);
-              setPage(1);
+              setSearchInput(e.target.value);
             }}
           />
 
@@ -250,7 +286,7 @@ export const CareerExplorerPage: React.FC = () => {
           />
 
           {/* Reset Filters */}
-          {(query || selectedSkill || sortField !== 'title' || sortOrder !== 'asc') && (
+          {(searchInput || debouncedQuery || selectedSkill || sortField !== 'title' || sortOrder !== 'asc') && (
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
               <Button variant="outline" size="md" onClick={handleClearFilters}>
                 Reset Filters
@@ -275,7 +311,7 @@ export const CareerExplorerPage: React.FC = () => {
           }}
         >
           <span style={{ fontSize: '14px', color: 'var(--text-main)' }}>{error}</span>
-          <Button size="sm" variant="outline" onClick={() => setPage(1)}>
+          <Button size="sm" variant="outline" onClick={handleRetry}>
             Retry
           </Button>
         </div>

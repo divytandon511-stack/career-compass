@@ -19,6 +19,66 @@ export interface AuthContextType {
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+interface RestoredSessionData {
+  token: string | null;
+  user: UserProfile | null;
+  authUser: AuthUser | null;
+  error?: unknown;
+}
+
+let activeRestorationPromise: Promise<RestoredSessionData> | null = null;
+
+async function performSessionRestoration(): Promise<RestoredSessionData> {
+  try {
+    // Attempt silent rotation using HttpOnly refresh cookie (notifyOnFailure = false so guests don't get "session expired" errors)
+    const refreshRes = await authApi.refresh({ notifyOnFailure: false });
+    const newToken = refreshRes.data?.accessToken;
+    if (newToken) {
+      setAuthToken(newToken);
+      try {
+        const profileRes = await userApi.getProfile();
+        if (profileRes.data) {
+          return {
+            token: newToken,
+            user: profileRes.data,
+            authUser: {
+              id: profileRes.data.id,
+              email: profileRes.data.email,
+              role: profileRes.data.role,
+              displayName: profileRes.data.displayName,
+            },
+          };
+        }
+      } catch (profileErr) {
+        console.error('Failed to hydrate user profile:', profileErr);
+        // Fallback to getMe if profile hydration deferred
+        try {
+          const meRes = await authApi.getMe();
+          if (meRes.data?.user) {
+            return {
+              token: newToken,
+              user: null,
+              authUser: meRes.data.user,
+            };
+          }
+        } catch {
+          // ignore fallback error
+        }
+      }
+      return {
+        token: newToken,
+        user: null,
+        authUser: null,
+      };
+    }
+    return { token: null, user: null, authUser: null };
+  } catch (err) {
+    return { token: null, user: null, authUser: null, error: err };
+  } finally {
+    activeRestorationPromise = null;
+  }
+}
+
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -70,41 +130,44 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     async function restoreSession() {
       setIsLoading(true);
       setSessionError(null);
-      try {
-        // Attempt silent rotation using HttpOnly refresh cookie
-        const refreshRes = await authApi.refresh();
-        if (isMounted && refreshRes.data?.accessToken) {
-          applyToken(refreshRes.data.accessToken);
-          // Query full authoritative profile
-          const profile = await hydrateProfile();
-          if (!profile && isMounted) {
-            // Fallback to token payload if profile fails but token is valid
-            const meRes = await authApi.getMe();
-            if (isMounted && meRes.data?.user) {
-              setAuthUser(meRes.data.user);
-            }
-          }
+
+      if (!activeRestorationPromise) {
+        activeRestorationPromise = performSessionRestoration();
+      }
+
+      const result = await activeRestorationPromise;
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (result.token) {
+        applyToken(result.token);
+        if (result.user) {
+          setUser(result.user);
         }
-      } catch (err: unknown) {
-        // Distinguish network/server outages from expired sessions
-        if (isMounted) {
-          applyToken(null);
-          setUser(null);
-          setAuthUser(null);
-          const status = (err as { status?: number })?.status;
-          const code = (err as { code?: string })?.code;
-          if (code === 'NETWORK_ERROR' || (status && status >= 500)) {
-            setSessionError('Unable to connect to CareerCompass services. Please check your connection.');
-          } else {
-            // Normal unauthenticated guest state
-            setSessionError(null);
-          }
+        if (result.authUser) {
+          setAuthUser(result.authUser);
         }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
+        setSessionError(null);
+      } else {
+        applyToken(null);
+        setUser(null);
+        setAuthUser(null);
+
+        const status = (result.error as { status?: number })?.status;
+        const code = (result.error as { code?: string })?.code;
+        if (code === 'NETWORK_ERROR' || (status && status >= 500)) {
+          setSessionError('Unable to connect to CareerCompass services. Please check your connection.');
+        } else if (status === 429) {
+          setSessionError('Too many authentication attempts. Please wait a moment before trying again.');
+        } else {
+          // Normal unauthenticated guest state
+          setSessionError(null);
         }
       }
+
+      setIsLoading(false);
     }
 
     restoreSession();
@@ -112,9 +175,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return () => {
       isMounted = false;
     };
-  }, [applyToken, hydrateProfile]);
+  }, [applyToken]);
 
   const login = async (payload: LoginPayload): Promise<UserProfile> => {
+    activeRestorationPromise = null;
     setIsLoading(true);
     setSessionError(null);
     try {
@@ -146,6 +210,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const logout = async (allDevices = false): Promise<void> => {
+    activeRestorationPromise = null;
     setIsLoading(true);
     try {
       await authApi.logout({ allDevices });
@@ -160,16 +225,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const refreshSession = async (): Promise<boolean> => {
     try {
-      const res = await authApi.refresh();
+      const res = await authApi.refresh({ notifyOnFailure: false });
       if (res.data?.accessToken) {
         applyToken(res.data.accessToken);
         await hydrateProfile();
         return true;
       }
-    } catch {
-      applyToken(null);
-      setUser(null);
-      setAuthUser(null);
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status;
+      if (status === 401 || status === 403) {
+        applyToken(null);
+        setUser(null);
+        setAuthUser(null);
+      }
     }
     return false;
   };

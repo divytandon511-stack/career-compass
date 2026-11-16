@@ -24,7 +24,7 @@ export const CareerDetailPage: React.FC = () => {
   const checkSavedState = useCallback(async (careerId: string) => {
     if (!isAuthenticated || !isStudent) return;
     try {
-      const res = await careersApi.getSavedCareers({ limit: 100 });
+      const res = await careersApi.getSavedCareers({ limit: 50 });
       const found = (res.data || []).some((sc: SavedCareer) => sc.id === careerId);
       setIsSaved(found);
     } catch {

@@ -34,7 +34,7 @@ export const AdminCareersPage: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await careersApi.listCareers({ limit: 100 });
+      const res = await careersApi.listCareers({ limit: 50 });
       setCareers(res.data || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load career catalogue');

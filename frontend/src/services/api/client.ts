@@ -58,27 +58,67 @@ interface RequestOptions extends RequestInit {
   _isRefreshRequest?: boolean;
 }
 
-// Single-flight refresh promise to handle concurrent 401s cleanly
-let refreshPromise: Promise<string | null> | null = null;
+export interface RefreshOptions {
+  notifyOnFailure?: boolean;
+}
 
-async function executeTokenRefresh(): Promise<string | null> {
+// Single-flight refresh promise to handle concurrent 401s and authApi.refresh() calls cleanly
+let refreshPromise: Promise<string | null> | null = null;
+let shouldNotifyOnFailure = false;
+let lastRefreshError: ApiError | null = null;
+
+export const getLastRefreshError = (): ApiError | null => lastRefreshError;
+
+export async function executeTokenRefresh(options: RefreshOptions = {}): Promise<string | null> {
+  const { notifyOnFailure = true } = options;
+  if (notifyOnFailure) {
+    shouldNotifyOnFailure = true;
+  }
+
   if (refreshPromise) {
     return refreshPromise;
   }
 
   refreshPromise = (async () => {
+    lastRefreshError = null;
     try {
       const refreshUrl = `${API_BASE_URL}/auth/refresh`;
-      const response = await fetch(refreshUrl, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      let response: Response;
+      try {
+        response = await fetch(refreshUrl, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+      } catch (netErr) {
+        lastRefreshError = new ApiError(
+          netErr instanceof Error ? netErr.message : 'Network request failed',
+          'NETWORK_ERROR',
+          0
+        );
+        // Transient network drops must not revoke credentials or log out the student
+        return null;
+      }
 
       if (!response.ok) {
-        notifyAuthFailure();
+        let errorData: ApiErrorEnvelope | null = null;
+        try {
+          errorData = await response.json();
+        } catch {
+          // response body was empty or not JSON
+        }
+
+        const message = errorData?.error?.message || `Refresh failed with status ${response.status}`;
+        const code = errorData?.error?.code || (response.status === 401 ? 'UNAUTHORIZED' : 'HTTP_ERROR');
+        lastRefreshError = new ApiError(message, code, response.status, errorData?.error?.details);
+
+        // Only trigger global auth revocation on genuine authentication rejections (401/403).
+        // Transient rate limits (429) or upstream errors (5xx) must not clear user credentials.
+        if (shouldNotifyOnFailure && (response.status === 401 || response.status === 403)) {
+          notifyAuthFailure();
+        }
         return null;
       }
 
@@ -89,13 +129,11 @@ async function executeTokenRefresh(): Promise<string | null> {
         return newToken;
       }
 
-      notifyAuthFailure();
-      return null;
-    } catch {
-      notifyAuthFailure();
+      lastRefreshError = new ApiError('Invalid refresh response payload', 'INVALID_RESPONSE', 500);
       return null;
     } finally {
       refreshPromise = null;
+      shouldNotifyOnFailure = false;
     }
   })();
 
@@ -134,6 +172,12 @@ export async function apiClient<T>(
       credentials: 'include', // sends and receives HttpOnly refresh cookie
     });
   } catch (netErr) {
+    if (netErr instanceof DOMException && netErr.name === 'AbortError') {
+      throw netErr;
+    }
+    if (netErr instanceof Error && netErr.name === 'AbortError') {
+      throw netErr;
+    }
     throw new ApiError(
       netErr instanceof Error ? netErr.message : 'Network request failed',
       'NETWORK_ERROR',

@@ -121,10 +121,13 @@ export const CounsellorsPage: React.FC = () => {
           }}
         >
           {counsellors.map((counsellor) => {
+            const counsellorId = counsellor.id || (counsellor as unknown as { userId?: string }).userId;
             const profile = counsellor.profile as { bio?: string | null; active?: boolean } | null;
+            const bio = (counsellor as unknown as { bio?: string | null }).bio || profile?.bio;
+            const displayName = counsellor.displayName || 'Advisor';
             return (
               <div
-                key={counsellor.id}
+                key={counsellorId || displayName}
                 className="card"
                 style={{
                   display: 'flex',
@@ -150,11 +153,13 @@ export const CounsellorsPage: React.FC = () => {
                         flexShrink: 0,
                       }}
                     >
-                      {counsellor.displayName.charAt(0).toUpperCase()}
+                      {displayName.charAt(0).toUpperCase()}
                     </div>
                     <div>
-                      <h3 style={{ margin: 0, fontSize: '16px' }}>{counsellor.displayName}</h3>
-                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{counsellor.email}</span>
+                      <h3 style={{ margin: 0, fontSize: '16px' }}>{displayName}</h3>
+                      {counsellor.email && (
+                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{counsellor.email}</span>
+                      )}
                     </div>
                   </div>
 
@@ -185,9 +190,9 @@ export const CounsellorsPage: React.FC = () => {
                     </span>
                   </div>
 
-                  {profile?.bio ? (
+                  {bio ? (
                     <p style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                      {profile.bio}
+                      {bio}
                     </p>
                   ) : (
                     <p style={{ fontSize: '13px', color: 'var(--text-dim)', fontStyle: 'italic' }}>
@@ -198,8 +203,9 @@ export const CounsellorsPage: React.FC = () => {
 
                 <Button
                   size="sm"
-                  onClick={() => navigate(`/counsellors/${counsellor.id}/book`)}
+                  onClick={() => navigate(`/counsellors/${counsellorId}/book`)}
                   style={{ width: '100%' }}
+                  disabled={!counsellorId}
                 >
                   View Available Slots & Book
                 </Button>
