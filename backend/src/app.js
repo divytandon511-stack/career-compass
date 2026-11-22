@@ -41,6 +41,10 @@ export const createApp = ({
 } = {}) => {
   const app = express();
 
+  // Render sits behind a single reverse proxy. Trust that hop so express-rate-limit
+  // can read the forwarded client IP without trusting arbitrary client headers.
+  app.set('trust proxy', env.NODE_ENV === 'production' ? 1 : false);
+
   // 1. Security Headers via Helmet
   app.use(helmet());
 

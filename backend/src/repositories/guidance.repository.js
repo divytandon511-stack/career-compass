@@ -53,8 +53,13 @@ export class GuidanceRepository {
         this.model = this.mongoose.models.GuidanceSession ||
           this.mongoose.model('GuidanceSession', guidanceSessionSchema);
         return this.model;
-      }).catch(() => {
+      }).catch((error) => {
         this.connectionPromise = null;
+        // Keep diagnostics useful without logging the connection string or credentials.
+        console.error('[GuidanceRepository] MongoDB connection failed', {
+          name: error?.name || 'Error',
+          code: error?.code || error?.codeName || 'UNKNOWN',
+        });
         throw new AppError('DB_UNAVAILABLE', 'Guidance history is unavailable', 503);
       });
     }
