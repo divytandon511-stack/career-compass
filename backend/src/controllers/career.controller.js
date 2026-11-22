@@ -9,7 +9,7 @@ export const createCareerController = ({ careerService } = {}) => {
     archiveCareer: async (req, res, next) => { try { await careerService.archiveCareer({ careerId: req.params.id }); res.status(204).end(); } catch (e) { next(e); } },
     listSkills: run((r) => careerService.listSkills({ query: r.query })),
     createSkill: run((r) => careerService.createSkill({ body: r.body }), 201),
-    listPathways: run((r) => careerService.listPathways({ careerId: r.params.id, query: r.query })),
+    listPathways: run((r) => careerService.listPathways({ idOrSlug: r.params.idOrSlug, query: r.query })),
     createPathway: run((r) => careerService.createPathway({ careerId: r.params.id, body: r.body }), 201),
     updatePathway: run((r) => careerService.updatePathway({ pathwayId: r.params.id, body: r.body })),
     listSavedCareers: run((r) => careerService.listSavedCareers({ user: r.user, query: r.query })),

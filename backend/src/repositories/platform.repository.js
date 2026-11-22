@@ -170,7 +170,13 @@ export class PlatformRepository {
     const pagination = page({ page: pageNumber, limit });
     const where = {
       active: true,
-      ...(q ? { displayName: { contains: q, mode: 'insensitive' } } : {}),
+      user: { is: { status: 'ACTIVE' } },
+      ...(q ? {
+        OR: [
+          { displayName: { contains: q, mode: 'insensitive' } },
+          { bio: { contains: q, mode: 'insensitive' } },
+        ],
+      } : {}),
     };
     const [profiles, total] = await Promise.all([
       this.dbClient.counsellorProfile.findMany({
@@ -178,7 +184,6 @@ export class PlatformRepository {
         orderBy: { [sort]: order },
         skip: (pagination.page - 1) * pagination.limit,
         take: pagination.limit,
-        include: { user: { select: { email: true } } },
       }),
       this.dbClient.counsellorProfile.count({ where }),
     ]);
@@ -189,7 +194,6 @@ export class PlatformRepository {
         displayName: p.displayName,
         bio: p.bio,
         active: p.active,
-        email: p.user?.email || null,
         createdAt: p.createdAt,
       })),
       meta: metadata({ ...pagination, total }),

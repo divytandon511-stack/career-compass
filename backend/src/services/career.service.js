@@ -20,7 +20,7 @@ export class CareerService {
   archiveCareer({ careerId }) { const { id } = parse(careerIdSchema, { id: careerId }); return this.careerRepository.archiveCareer({ careerId: id }); }
   listSkills({ query }) { return this.careerRepository.listSkills(parse(skillListQuerySchema, query)); }
   createSkill({ body }) { return this.careerRepository.createSkill(parse(skillCreateSchema, body)); }
-  listPathways({ careerId, query }) { const { id } = parse(careerIdSchema, { id: careerId }); return this.careerRepository.listPathways({ careerId: id, ...parse(pathwayListQuerySchema, query) }); }
+  listPathways({ idOrSlug, query }) { const { idOrSlug: lookup } = parse(careerLookupSchema, { idOrSlug }); return this.careerRepository.listPathways({ idOrSlug: lookup, ...parse(pathwayListQuerySchema, query) }); }
   createPathway({ careerId, body }) { const { id } = parse(careerIdSchema, { id: careerId }); return this.careerRepository.createPathway({ careerId: id, data: parse(pathwayCreateSchema, body) }); }
   updatePathway({ pathwayId, body }) { const { id } = parse(pathwayIdSchema, { id: pathwayId }); return this.careerRepository.updatePathway({ pathwayId: id, data: parse(pathwayUpdateSchema, body) }); }
   listSavedCareers({ user, query }) { return this.careerRepository.listSavedCareers({ studentId: user.id, ...parse(savedCareerListQuerySchema, query) }); }

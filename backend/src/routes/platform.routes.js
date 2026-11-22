@@ -24,7 +24,8 @@ export const createPlatformRouter = ({ service, authenticate } = {}) => {
   router.post('/assessments/:id/questions', ...admin, controller.createQuestion);
   router.patch('/questions/:id', ...admin, controller.updateQuestion);
 
-  router.get('/counsellors', ...auth, controller.listCounsellors);
+  // The public directory only returns counsellor profile fields intended for discovery.
+  router.get('/counsellors', controller.listCounsellors);
   router.get('/counsellors/:id', ...auth, controller.getCounsellor);
   router.get('/counsellors/me/slots', ...counsellor, controller.listOwnSlots);
   router.post('/counsellors/me/slots', ...counsellor, controller.createSlot);

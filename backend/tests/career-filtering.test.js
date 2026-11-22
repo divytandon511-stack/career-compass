@@ -130,6 +130,20 @@ const createMockDbClient = () => {
         return careerSkills.length;
       },
     },
+    educationPathway: {
+      async findMany({ where = {}, skip = 0, take = 20 } = {}) {
+        const pathways = [{
+          id: 'pathway-1',
+          careerId: 'c-01',
+          stage: 'Undergraduate',
+          qualification: 'B.Tech Computer Science',
+        }].filter((pathway) => pathway.careerId === where.careerId);
+        return pathways.slice(skip, skip + take);
+      },
+      async count({ where = {} } = {}) {
+        return where.careerId === 'c-01' ? 1 : 0;
+      },
+    },
   };
 };
 
@@ -144,6 +158,18 @@ describe('Career Explorer Skill-Filtering & Taxonomy Regression Tests', () => {
   const PROJ_MGMT_ID = '11111111-0000-4000-8000-000000000003';
   const AUTOCAD_ID = '11111111-0000-4000-8000-000000000004';
   const UNMATCHED_UUID = '00000000-0000-0000-0000-000000000000';
+
+  it('resolves career pathways by slug', async () => {
+    const res = await request(app).get('/api/v1/careers/software-architect/pathways');
+
+    expect(res.status).toBe(200);
+    expect(res.body.meta.total).toBe(1);
+    expect(res.body.data[0]).toMatchObject({
+      careerId: 'c-01',
+      stage: 'Undergraduate',
+      qualification: 'B.Tech Computer Science',
+    });
+  });
 
   it('1. filters careers by transversal skill "Python" returning all 3 published careers', async () => {
     const res = await request(app).get(`/api/v1/careers?skillId=${PYTHON_ID}`);
