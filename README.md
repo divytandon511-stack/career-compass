@@ -158,6 +158,8 @@ npm run dev
 ```
 The backend API will be available at `http://localhost:4000/api/v1`.
 
+For production deployments, use `npm start` as the service start command. It applies pending migrations and initializes the assessment and career catalogue only when those datasets are missing, so a fresh Render database is ready to use after deployment. Existing populated datasets are left in place.
+
 ### 4. Setup and Run the Frontend
 
 Open a new terminal window at the repository root:
